@@ -1,1 +1,33 @@
+# Ignorar archivos sensibles
+
+# Archivos y carpetas de datos
+data/
+config/config.json
+
+# Archivos de entorno
+.env
+*.env
+
+# Archivos del sistema
+__pycache__/
 *.pyc
+*.pyo
+*.pyd
+
+# Archivos temporales
+*.log
+*.tmp
+
+# Archivos de IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# Archivos exportados
+*.csv
+*.xlsx
+*.pdf
+
+# Archivos del sistema operativo
+.DS_Store
+Thumbs.db
