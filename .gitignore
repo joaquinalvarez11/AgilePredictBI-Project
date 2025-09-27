@@ -1,11 +1,10 @@
 # Ignorar archivos sensibles
 
 # Archivos y carpetas de datos
-data/
-config/config.json
+/data
+/config
 
 # Archivos de entorno
-.env
 *.env
 
 # Archivos del sistema
@@ -19,8 +18,8 @@ __pycache__/
 *.tmp
 
 # Archivos de IDE
-.vscode/
-.idea/
+/.vscode
+/.idea
 *.code-workspace
 
 # Archivos exportados
