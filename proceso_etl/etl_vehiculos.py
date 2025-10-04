@@ -5,7 +5,8 @@ import re
 def transformar_excel(ruta_archivo, salida_csv=None, salida_excel=None):
     """
     ETL en Python que replica las transformaciones hechas en Power Query (Power BI),
-    con creación del campo 'ID Accidente'.
+    con creación del campo 'ID Accidente' (mismo ID para filas con el mismo Código Accidente) y
+    con la integracion de mas archivos.
     """
 
     # === 1. Extraer Año y Mes del nombre del archivo ===
@@ -67,11 +68,19 @@ def transformar_excel(ruta_archivo, salida_csv=None, salida_excel=None):
     if "Patente" in df.columns:
         df["Patente"] = df["Patente"].str.replace("-", "", regex=False).str.replace(" ", "", regex=False)
 
-    # === 10. Crear campo "ID Accidente" ===
+    # === 10. Crear campo "ID Accidente" (agrupado por Código) ===
     df = df.reset_index(drop=True)
-    df["Correlativo"] = df.index + 1
-    df["Correlativo"] = df["Correlativo"].astype(str).str.zfill(3)
-    df["ID Accidente"] = "ACC-" + prefijo_fecha + "-" + df["Correlativo"]
+
+    # Mapeo de Código Accidente -> ID único
+    codigos_unicos = df["Código Accidente"].dropna().unique()
+    mapa_ids = {}
+
+    for i, codigo in enumerate(codigos_unicos, start=1):
+        correlativo = str(i).zfill(3)  # 001, 002, ...
+        mapa_ids[codigo] = f"ACC-{prefijo_fecha}-{correlativo}"
+
+    # Asignar el mismo ID a todas las filas con el mismo Código Accidente
+    df["ID Accidente"] = df["Código Accidente"].map(mapa_ids)
 
     # === 11. Exportar ===
     if salida_csv:
@@ -83,7 +92,7 @@ def transformar_excel(ruta_archivo, salida_csv=None, salida_excel=None):
 
 
 # ================================
-# Procesar TODOS los Excel en carpeta
+# Procesar SOLO nuevos Excel en carpeta
 # ================================
 if __name__ == "__main__":
     carpeta_brutos = r"C:\Users\crist\Desktop\Proyecto De Título\Prototipados de la tesis\Prototipo de Powe BI\ETL prueba\ExcelETLVehiculoBrutos"
@@ -95,12 +104,17 @@ if __name__ == "__main__":
     # Recorrer todos los Excel de la carpeta de brutos
     for archivo in os.listdir(carpeta_brutos):
         if archivo.endswith(".xlsx"):
+            nombre_sin_ext = os.path.splitext(archivo)[0]
             ruta_entrada = os.path.join(carpeta_brutos, archivo)
 
-            # Archivos de salida (Excel + CSV)
-            nombre_sin_ext = os.path.splitext(archivo)[0]
+            # Archivos de salida
             ruta_excel_salida = os.path.join(carpeta_limpios, f"Limpio_{nombre_sin_ext}.xlsx")
             ruta_csv_salida = os.path.join(carpeta_limpios, f"Limpio_{nombre_sin_ext}.csv")
+
+            # --- Verificar si YA existe ---
+            if os.path.exists(ruta_excel_salida) and os.path.exists(ruta_csv_salida):
+                print(f"⏭️ Saltado (ya procesado): {archivo}")
+                continue
 
             print(f"🔄 Procesando: {archivo}...")
             try:
