@@ -2,6 +2,7 @@
 
 # Archivos y carpetas de datos
 /data
+/database
 /config
 
 # Archivos de entorno

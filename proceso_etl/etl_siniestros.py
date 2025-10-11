@@ -2,9 +2,10 @@ import pandas as pd
 import numpy as np
 import os
 import glob
-from datetime import datetime, time
+from datetime import datetime, date, time
 from pathlib import Path
 import csv
+from config_manager import obtener_ruta
 
 
 class ETLSiniestralidad():
@@ -79,74 +80,115 @@ class ETLSiniestralidad():
         "Column67": "Descripción del Accidente",
     }
 
-    def __init__(self):
-        """Inicializa las rutas y configuraciones para el ETL de Siniestralidad."""
-        # Se asume que las rutas base vienen de un archivo de configuración
-        self.__ruta_bruta = os.path.join(BASE_BRUTOS_PATH, 'Siniestralidad/')
-        self.__ruta_limpia = os.path.join(BASE_LIMPIOS_PATH, 'Siniestralidad/')
-        self.__CSV_SEP = "|"
-        os.makedirs(self.__ruta_limpia, exist_ok=True)
-        self.__log("ETL de Siniestralidad inicializada.")
-
     # -----------------------------------------
     # MÉTODOS PÚBLICOS
     # -----------------------------------------
 
-    def ejecutar_etl(self):
-        """
-        Punto de entrada principal. Busca el archivo más reciente y ejecuta
-        el proceso de transformación si no ha sido procesado antes.
-        """
-        self.__log("Iniciando ETL de Siniestralidad...")
-        archivo_excel = self.__get_most_recent_excel(self.__ruta_bruta)
+    def __init__(self):
+        """Inicializa las rutas usando el config_manager."""
+        # Se obtienen las rutas del archivo de configuración centralizado
+        base_brutos = obtener_ruta('ruta_excel_bruto')
+        base_limpios = obtener_ruta('ruta_csv_limpio')
+        
+        self.__ruta_bruta_general = base_brutos
+        self.__ruta_limpia_base = os.path.join(base_limpios, 'Siniestralidad', 'Ficha 0') # La salida sí es específica
+        self.__CSV_SEP = "|"
+        os.makedirs(self.__ruta_limpia_base, exist_ok=True)
+        self.__log("ETL de Siniestralidad (Ficha 0) inicializada.")
 
-        if not archivo_excel:
-            self.__log("No se encontraron archivos Excel en la carpeta de entrada. Finalizando.")
-            return
+    def procesar_archivo(self, ruta_archivo_excel):
+            """
+            Punto de entrada para el controlador. Procesa un único archivo que se le entrega.
+            Devuelve True si tuvo éxito, False si falló.
+            """
+            self.__log(f"Iniciando procesamiento para: {ruta_archivo_excel}")
 
-        nombre_base = Path(archivo_excel).stem
-        ruta_csv_salida = os.path.join(self.__ruta_limpia, f"{nombre_base}_Limpio.csv")
+            nombre_base = Path(ruta_archivo_excel).stem
+            # Construir la ruta de salida completa
+            anio_str = self.__extraer_anio_de_ruta(ruta_archivo_excel)
+            if not anio_str:
+                self.__log(f"ADVERTENCIA: No se pudo determinar año para '{nombre_base}'. Se guardará en raíz de 'Siniestralidad/Ficha 0'.")
+                anio_str = ""
+            ruta_salida_anio = os.path.join(self.__ruta_limpia_base, anio_str)
+            os.makedirs(ruta_salida_anio, exist_ok=True)
+            ruta_csv_salida = os.path.join(ruta_salida_anio, f"{nombre_base}_Limpio.csv")
 
-        if os.path.exists(ruta_csv_salida):
-            self.__log(f"El archivo '{nombre_base}' ya ha sido procesado. Saltando.")
-            return
+            # Verificar si el archivo ya fue procesado
+            if os.path.exists(ruta_csv_salida):
+                self.__log(f"El archivo '{nombre_base}' ya ha sido procesado. Saltando.")
+                # Es importante notificar al controlador que no hubo error, simplemente no se hizo nada nuevo.
+                return True
 
-        try:
-            df_transformado = self.__transformar_excel(archivo_excel)
-            
-            # Guardado del archivo
-            self.__guardar_csv(df_transformado, ruta_csv_salida)
+            try:
+                # Llamada a la lógica principal de transformación
+                df_transformado = self.__transformar_excel(ruta_archivo_excel)
 
-        except Exception as e:
-            self.__log(f"❌ Ocurrió un error crítico durante la transformación de '{nombre_base}': {e}")
+                # Verificar si la transformación produjo un DataFrame válido
+                if df_transformado is None or df_transformado.empty:
+                    self.__log(f"ADVERTENCIA: La transformación de '{nombre_base}' no produjo datos válidos.")
+                    # Consideramos esto un éxito parcial (no error), pero no guardamos nada.
+                    return True
+
+                # Guardar el resultado si la transformación fue exitosa
+                self.__guardar_csv(df_transformado, ruta_csv_salida)
+                return True # Indicar éxito al controlador
+
+            except Exception as e:
+                self.__log(f"ERROR CRÍTICO durante la transformación de '{nombre_base}': {e}")
+                # Propagar la excepción para que el controlador (deteccion_auto) la capture
+                raise e
 
 
     # -----------------------------------------
     # MÉTODOS PRIVADOS - Lógica del ETL
     # -----------------------------------------
+    def __extraer_anio_de_ruta(self, ruta_archivo):
+        """Intenta extraer el año (carpeta 'YYYY') del path del archivo."""
+        try:
+            parts = Path(ruta_archivo).parts
+            for part in reversed(parts[:-1]):
+                if len(part) == 4 and part.isdigit():
+                    return part
+        except Exception as e:
+            self.__log(f"No se pudo extraer año de la ruta {ruta_archivo}: {e}")
+        return None
 
     def __transformar_excel(self, ruta_excel):
-        """
-        Orquesta todo el proceso de transformación para un único archivo Excel.
-        """
+        """Orquesta el proceso de transformación para un archivo Excel."""
+        self.__log(f"Transformando archivo: {Path(ruta_excel).name}")
         # 1. Leer y encontrar encabezado
         df, _ = self.__read_raw_sheet(ruta_excel)
         if df is None:
-            raise ValueError("No se pudo leer la hoja o encontrar el encabezado 'Correlativo'.")
+            # Si no se puede leer, no podemos continuar.
+            self.__log("Error: No se pudo leer la hoja o encontrar el encabezado 'Correlativo'.")
+            return None # Devolver None para indicar fallo controlado
 
-        # 2. Limpieza y preparación inicial
+        # 2. Limpieza inicial
         df = df.rename(columns=self.__RENAMINGS)
         df = self.__limpieza_inicial(df)
+        if df.empty:
+             self.__log("DataFrame vacío después de la limpieza inicial.")
+             return None
 
-        # 3. Anulación de dinamización y combinación
+        # 3. Unpivot y combinar
         df = self.__unpivot_y_combinar(df)
+        if df.empty:
+             self.__log("DataFrame vacío después del unpivot y merge.")
+             return None
 
-        # 4. Imputación y expansión de columnas
+        # 4. Imputar y expandir
         df = self.__imputar_y_expandir(df)
-        
-        # 5. Pasos finales y filtros
-        df = self.__pasos_finales(df)
+        if df.empty:
+             self.__log("DataFrame vacío después de imputar y expandir.")
+             return None
 
+        # 5. Pasos finales
+        df = self.__pasos_finales(df)
+        if df.empty:
+             self.__log("DataFrame vacío después de los pasos finales.")
+             return None
+
+        self.__log(f"Transformación completada exitosamente. {len(df)} filas generadas.")
         return df
 
     def __limpieza_inicial(self, df):
@@ -156,7 +198,9 @@ class ETLSiniestralidad():
         if "Hora" in df.columns: df["Hora"] = df["Hora"].apply(self.__fix_time)
 
         df = df.dropna(subset=["Correlativo"])
+        # Asegurarse que Correlativo no sea un string vacío después de quitar NaNs
         df = df[df["Correlativo"].astype(str).str.strip() != ""]
+        if df.empty: return df # Salir temprano si no hay datos válidos
         
         cols_to_drop = [c for c in df.columns if 'Column' in str(c)] + [
             "ID Contrato", "ID Tramo", "Administrador", "Nombre Administrador"
@@ -175,7 +219,7 @@ class ETLSiniestralidad():
 
         # Creación de ID Accidente
         df["ID Accidente"] = df.apply(self.__make_id_acc, axis=1)
-        self.__log("✅ Preparación inicial completada.")
+        self.__log("Preparación inicial completada.")
         return df
 
     def __unpivot_y_combinar(self, df):
@@ -199,7 +243,7 @@ class ETLSiniestralidad():
             if len(seccion_df.columns) > 1:
                 work_df = pd.merge(work_df, seccion_df, on="ID Accidente", how="left")
         
-        self.__log("✅ Merges completados.")
+        self.__log("Merges completados.")
         return work_df
 
     def __imputar_y_expandir(self, df):
@@ -223,7 +267,7 @@ class ETLSiniestralidad():
             if col_name_in_df in df.columns:
                 df = self.__split_and_explode(df, col_name_in_df, col)
         
-        self.__log("✅ Imputación y expansión completadas.")
+        self.__log("Imputación y expansión completadas.")
         return df
 
     def __pasos_finales(self, df):
@@ -234,7 +278,7 @@ class ETLSiniestralidad():
             df = df[cond_desc].reset_index(drop=True)
 
         df["FECHA/HORA"] = df.apply(self.__combine_fecha_hora, axis=1)
-        self.__log("✅ Proceso final completado.")
+        self.__log("Proceso final completado.")
         return df
         
     # -----------------------------------------
@@ -246,32 +290,32 @@ class ETLSiniestralidad():
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         print(f"[{now}] [ETL Siniestralidad] {msg}")
 
-    def __get_most_recent_excel(self, folder):
-        """Busca el archivo Excel más reciente en una carpeta."""
-        self.__log(f"Buscando archivo Excel más reciente en: {folder}")
-        patterns = ["*.xlsx", "*.xlsm", "*.xls"]
-        files = []
-        for p in patterns:
-            files.extend(glob.glob(os.path.join(folder, p)))
-        if not files:
-            return None
-        files.sort(key=os.path.getmtime, reverse=True)
-        return files[0]
-
     def __read_raw_sheet(self, path):
         """Lee la hoja de Excel y localiza la fila de encabezado."""
         self.__log(f"Cargando archivo: {path}")
-        df_raw = pd.read_excel(path, header=None, engine="openpyxl", dtype=object)
-        first_col = df_raw.iloc[:, 0].astype(str).fillna("")
-        matches = first_col[first_col.str.strip().str.lower() == "correlativo"]
-        
-        if matches.empty: return None, None
-        
-        header_row_idx = matches.index[0]
-        df_after = df_raw.iloc[header_row_idx + 1:].reset_index(drop=True)
-        df_after.columns = [f"Column{i+1}" for i in range(df_after.shape[1])]
-        df_after = df_after.dropna(how='all').copy()
-        return df_after, header_row_idx
+        try:
+            # --- Cambio: Añadir engine ---
+            engine = 'xlrd' if path.lower().endswith('.xls') else 'openpyxl'
+            self.__log(f"Usando motor: {engine}") # Ya usa __log
+
+            df_raw = pd.read_excel(path, header=None, engine=engine, dtype=object)
+            first_col = df_raw.iloc[:, 0].astype(str).fillna("")
+            matches = first_col[first_col.str.strip().str.lower() == "correlativo"]
+
+            if matches.empty:
+                 self.__log("Error: No se encontró 'Correlativo'.") # Ya usa __log
+                 return None, None
+
+            header_row_idx = matches.index[0]
+            self.__log(f"Encabezado encontrado en fila Excel {header_row_idx + 2}")
+            df_after = df_raw.iloc[header_row_idx + 1:].reset_index(drop=True)
+            if not df_after.empty:
+                 df_after.columns = [f"Column{i+1}" for i in range(df_after.shape[1])]
+            df_after = df_after.dropna(how='all').copy()
+            return df_after, header_row_idx
+        except Exception as e:
+            self.__log(f"Error al leer Excel {path}: {e}") # Ya usa __log
+            return None, None
 
     def __unpivot_section(self, df, id_vars, section_name, new_col_names):
         """Lógica de anulación de dinamización para una sección específica."""
@@ -359,7 +403,6 @@ class ETLSiniestralidad():
         return exploded
 
     def __make_id_acc(self, row):
-        # ... (código de la función make_id_acc) ...
         try:
             correl = int(row["Correlativo"])
             fecha = row["Fecha"]
@@ -368,7 +411,6 @@ class ETLSiniestralidad():
         except (ValueError, TypeError): return None
 
     def __combine_fecha_hora(self, row):
-        # ... (código de la función combine_fecha_hora) ...
         f = row.get("Fecha")
         h = row.get("Hora")
         if pd.isna(f) or pd.isna(h): return pd.NaT
@@ -379,10 +421,11 @@ class ETLSiniestralidad():
         """Guarda el DataFrame final en un archivo CSV."""
         self.__log(f"Guardando CSV limpio en: {ruta_csv}")
         try:
+            os.makedirs(os.path.dirname(ruta_csv), exist_ok=True)
             with open(ruta_csv, "w", encoding="utf-8-sig", newline='') as f:
                 f.write(f"sep={self.__CSV_SEP}\n")
                 df.to_csv(f, sep=self.__CSV_SEP, index=False, quoting=csv.QUOTE_ALL)
-            self.__log(f"🎉 CSV guardado correctamente. Filas finales: {len(df)}")
+            self.__log(f"CSV guardado correctamente. Filas finales: {len(df)}")
         except Exception as e:
-            self.__log(f"❌ Error al guardar CSV: {e}")
+            self.__log(f"Error al guardar CSV: {e}")
             raise

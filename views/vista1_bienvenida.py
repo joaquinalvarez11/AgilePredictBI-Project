@@ -4,9 +4,9 @@ from PIL import Image, ImageTk
 import os
 
 class VistaBienvenida(ttk.Frame):
-    def __init__(self, parent):
+    def __init__(self, parent, controller):
         super().__init__(parent)
-        self.parent = parent
+        self.controller = controller 
 
         # Configurar la cuadrícula del frame principal para que el contenido se centre y expanda
         self.grid_rowconfigure(0, weight=1) # Fila superior para los logos
@@ -64,4 +64,4 @@ class VistaBienvenida(ttk.Frame):
                   wraplength=600, justify="center").pack(pady=10) # Línea más ancha
 
         # Botón Siguiente
-        ttk.Button(text_button_frame, text="Siguiente", command=parent.next_page).pack(pady=20)
+        ttk.Button(text_button_frame, text="Siguiente", command=self.controller.show_menu_principal).pack(pady=20)
