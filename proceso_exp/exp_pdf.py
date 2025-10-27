@@ -7,9 +7,16 @@ from tkinter import ttk
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from PyPDF2 import PdfReader, PdfWriter
+from config_manager import obtener_ruta
 
-CARPETA_ORIGEN = r"C:\Users\hriar\AppData\Local\Temp\Power BI Desktop"
-CARPETA_DESTINO = r"C:\Users\hriar\Desktop\Test Exportar"
+CARPETA_ORIGEN = os.path.join(os.getenv('LOCALAPPDATA', ''), 'Temp', 'Power BI Desktop')
+try:
+    CARPETA_DESTINO = obtener_ruta('ruta_predicciones')
+except Exception as e:
+    print(f"Error al obtener ruta de predicciones desde config.json: {e}")
+    # Fallback a una ruta por defecto si falla la lectura del config
+    CARPETA_DESTINO = os.path.join(os.path.expanduser("~"), "Desktop", "Predicciones_PDF")
+    print(f"Usando ruta de destino por defecto: {CARPETA_DESTINO}")
 
 def mostrar_formulario(paginas_max):
     datos = {"tipo": None, "anio": "", "mes": "", "paginas": []}
@@ -120,6 +127,7 @@ def mostrar_formulario(paginas_max):
     return None, None
 
 def limpiar_pdf(ruta_pdf, paginas_deseadas):
+    """Extrae páginas específicas de un PDF y lo guarda con sufijo."""
     reader = PdfReader(ruta_pdf)
     writer = PdfWriter()
     for i in paginas_deseadas:
@@ -131,6 +139,7 @@ def limpiar_pdf(ruta_pdf, paginas_deseadas):
     return limpio_path
 
 class PDFHandler(FileSystemEventHandler):
+    """Manejador para detectar PDFs creados en la carpeta temporal de Power BI."""
     def on_created(self, event):
         if event.is_directory:
             time.sleep(20)

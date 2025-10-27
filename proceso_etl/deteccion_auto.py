@@ -2,6 +2,7 @@ import os
 import re
 import pandas as pd
 from pathlib import Path
+import threading
 from config_manager import obtener_ruta
 from proceso_etl.etl_siniestros import ETLSiniestralidad
 from proceso_etl.etl_trafico import ETLTrafico
@@ -103,20 +104,29 @@ def identificar_tipo_por_contenido(ruta_excel):
     return 'desconocido'
 
 
-def ejecutar_proceso_etl_completo():
+def ejecutar_proceso_etl_completo(callback_progreso=None, cancel_event=None):
     """
     Función orquestadora: Encuentra TODOS los archivos pendientes, los identifica
     (usando la estructura de carpetas) y delega su procesamiento.
     """
-    archivos_a_procesar, mensaje_busqueda = encontrar_archivos_a_procesar()
+    def reportar_progreso(mensaje, progreso_actual=None, progreso_total=None):
+        # Esta función interna llama al callback si existe
+        if callback_progreso:
+            callback_progreso(mensaje, progreso_actual, progreso_total)
+        # Sigue imprimiendo en consola para depuración
+        print(mensaje)
 
-    print(mensaje_busqueda) # Mostrar el log de la búsqueda
+    archivos_a_procesar, mensaje_busqueda = encontrar_archivos_a_procesar()
+    reportar_progreso(mensaje_busqueda) # Log de búsqueda
 
     if not archivos_a_procesar:
-        return "No hay archivos nuevos para procesar.", None # Mensaje para la GUI
-
+        return "No hay archivos nuevos para procesar.", None, False
+    
     resultados_procesamiento = []
-    archivos_procesados_ruta = [] # Para devolver la lista de archivos que se intentaron procesar
+    archivos_procesados_ruta = []
+    total_archivos = len(archivos_a_procesar)
+    proceso_cancelado = False # Flag de cancelación
+    progreso_actual = 0 # Contador para progreso
 
     # Mapa de clases ETL
     etl_map = {
@@ -125,57 +135,60 @@ def ejecutar_proceso_etl_completo():
         'vehiculos': ETLVehiculos
     }
 
-    print(f"\nIniciando procesamiento de {len(archivos_a_procesar)} archivos...")
+    reportar_progreso(f"\nIniciando procesamiento de {total_archivos} archivos...", 0, total_archivos)
 
-    for archivo_info in archivos_a_procesar:
+    for i, archivo_info in enumerate(archivos_a_procesar):
+        if cancel_event and cancel_event.is_set():
+            reportar_progreso("\nCancelación solicitada. Deteniendo...", progreso_actual, total_archivos)
+            proceso_cancelado = True
+            break # Salir del bucle
+
         ruta_archivo = archivo_info['ruta']
-        tipo_archivo = archivo_info['tipo'] # Usamos el tipo determinado por la carpeta
+        tipo_archivo = archivo_info['tipo']
         nombre_archivo = Path(ruta_archivo).name
-        archivos_procesados_ruta.append(ruta_archivo) # Añadir a la lista de procesados
+        archivos_procesados_ruta.append(ruta_archivo)
 
-        print(f"\nProcesando: {nombre_archivo} (Tipo detectado: {tipo_archivo})")
+        reportar_progreso(f"\n({progreso_actual + 1}/{total_archivos}) Procesando: {nombre_archivo}...", progreso_actual, total_archivos)
 
         ETLClass = etl_map.get(tipo_archivo)
-
         if not ETLClass:
-            mensaje = f"Error: No hay clase ETL para el tipo '{tipo_archivo}' de {nombre_archivo}."
-            print(mensaje)
-            resultados_procesamiento.append(mensaje)
-            continue # Saltar al siguiente archivo
+            mensaje = f"[ERR] No hay clase ETL definida para '{tipo_archivo}'."
+            reportar_progreso(f"-> {mensaje}", progreso_actual, total_archivos)
+            resultados_procesamiento.append(mensaje + f" Archivo: {nombre_archivo}")
+            continue
 
         try:
             etl_instance = ETLClass()
-            # Llamar a procesar_archivo (maneja internamente si ya existe, aunque la búsqueda ya lo filtró)
             resultado_exitoso = etl_instance.procesar_archivo(ruta_archivo)
+            progreso_actual += 1 # Avanzar progreso
 
             if resultado_exitoso:
-                 mensaje = f"Éxito: {nombre_archivo} procesado."
-                 print(mensaje)
+                 mensaje_resumen = f"[OK] {nombre_archivo}"
+                 reportar_progreso(f"-> {mensaje_resumen}", progreso_actual, total_archivos)
             else:
-                 # Si devuelve False, fue un fallo controlado (ej. no produjo datos)
-                 mensaje = f"Advertencia: {nombre_archivo} procesado pero no generó resultado (ver logs detallados)."
-                 print(mensaje)
-            resultados_procesamiento.append(mensaje)
+                 mensaje_resumen = f"[WARN] {nombre_archivo} (sin datos o advertencia)"
+                 reportar_progreso(f"-> {mensaje_resumen}", progreso_actual, total_archivos)
+            resultados_procesamiento.append(mensaje_resumen)
 
         except Exception as e:
-            # Capturar errores críticos durante la transformación individual
-            mensaje = f"ERROR CRÍTICO al procesar {nombre_archivo}: {e}"
-            print(mensaje)
-            resultados_procesamiento.append(mensaje)
-            # Continuar con el siguiente archivo a pesar del error
+            mensaje_resumen = f"[ERR] {nombre_archivo}: {type(e).__name__}"
+            reportar_progreso(f"-> ¡ERROR CRÍTICO! {mensaje_resumen} (Detalle: {e})", progreso_actual, total_archivos)
+            resultados_procesamiento.append(mensaje_resumen)
+            # Continuar con el siguiente archivo
 
     # Mensaje final para la GUI
     resumen_errores = sum(1 for msg in resultados_procesamiento if "ERROR" in msg)
     resumen_advertencias = sum(1 for msg in resultados_procesamiento if "Advertencia" in msg)
     resumen_exitosos = len(resultados_procesamiento) - resumen_errores - resumen_advertencias
-
     mensaje_final = (
-        f"Proceso ETL completado.\n"
-        f"- Archivos procesados con éxito: {resumen_exitosos}\n"
-        f"- Archivos con advertencias (sin datos generados): {resumen_advertencias}\n"
-        f"- Archivos con errores críticos: {resumen_errores}\n\n"
-        f"Detalles:\n" + "\n".join([f"  - {msg}" for msg in resultados_procesamiento])
+        f"Proceso ETL {'cancelado' if proceso_cancelado else 'completado'}.\n"
+        f"- Éxito: {resumen_exitosos}\n"
+        f"- Adv.: {resumen_advertencias}\n"
+        f"- Errores: {resumen_errores}\n\n"
+        f"Resultados individuales:\n" + "\n".join([f"  {msg}" for msg in resultados_procesamiento])
     )
 
+    reportar_progreso("\n--- PROCESO FINALIZADO ---" if not proceso_cancelado else "", progreso_actual, total_archivos)
+
     # Devolvemos el resumen y la lista de archivos procesados (o None si no se procesó ninguno)
-    return mensaje_final, archivos_procesados_ruta if archivos_procesados_ruta else None
+    return mensaje_final, archivos_procesados_ruta if archivos_procesados_ruta else None, proceso_cancelado

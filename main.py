@@ -10,7 +10,7 @@ from views.vista_etl import VistaETL
 class AgilePredictApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Asistente Predictivo - Ruta del Algarrobo")
+        self.title("AgilePredictBI - Asistente Predictivo")
         self.geometry("1200x700")
         self.resizable(False, False)
 

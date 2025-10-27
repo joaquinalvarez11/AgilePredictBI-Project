@@ -30,7 +30,7 @@ class VistaBienvenida(ttk.Frame):
         # Cargar y posicionar logo RDA
         try:
             left_img_path = os.path.join(assets_dir, "RDA_Logo.png")
-            left_img = Image.open(left_img_path).resize((220, 100), Image.LANCZOS) # Ajustar tamaño para que quepan juntos
+            left_img = Image.open(left_img_path).resize((250, 100), Image.LANCZOS) # Ajustar tamaño para que quepan juntos
             self.rda_logo = ImageTk.PhotoImage(left_img)
             ttk.Label(logos_frame, image=self.rda_logo).grid(row=0, column=1, padx=10, pady=10) # Columna 1
         except FileNotFoundError:
@@ -58,9 +58,9 @@ class VistaBienvenida(ttk.Frame):
         # Contenido centrado
         text_button_frame.grid_columnconfigure(0, weight=1)
 
-        ttk.Label(text_button_frame, text="Bienvenido al Asistente Predictivo", font=("Arial", 18, "bold")).pack(pady=10)
+        ttk.Label(text_button_frame, text="Bienvenido a AgilePredictBI", font=("Arial", 18, "bold")).pack(pady=10)
         ttk.Label(text_button_frame,
-                  text="Este asistente le ayudará a simular un análisis predictivo cruzando datos de tráfico y siniestralidad. Haga clic en Siguiente para comenzar.",
+                  text="Este asistente le ayudará a transformar sus fichas en análisis predictivo cruzando datos de tráfico y siniestralidad. Haga clic en Siguiente para comenzar.",
                   wraplength=600, justify="center").pack(pady=10) # Línea más ancha
 
         # Botón Siguiente
