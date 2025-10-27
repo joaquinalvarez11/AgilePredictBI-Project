@@ -21,7 +21,7 @@ class ETLTrafico():
     def __init__(self):
         """Inicializa las rutas usando el config_manager."""
         base_limpios = obtener_ruta('ruta_csv_limpio')
-        self.__ruta_limpia_base = os.path.join(base_limpios, 'Trafico Mensual/')
+        self.__ruta_limpia_base = os.path.join(base_limpios, 'Tráfico Mensual/')
         os.makedirs(self.__ruta_limpia_base, exist_ok=True)
         self.__log("ETL de Tráfico inicializada.")
     
