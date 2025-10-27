@@ -3,11 +3,15 @@ from tkinter import ttk, filedialog, messagebox
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
+import os
 
 class VistaExportar(ttk.Frame):
-    def __init__(self, parent):
+    def __init__(self, parent, controller):
         super().__init__(parent)
-        self.parent = parent
+        self.controller = controller
+        self.parent_container = parent
+
+        self.export_path = None
 
         self.grid_rowconfigure(0, weight=0) # Título
         self.grid_rowconfigure(1, weight=1) # Botones de exportación
@@ -26,8 +30,8 @@ class VistaExportar(ttk.Frame):
         
         nav = ttk.Frame(self)
         nav.grid(row=2, column=0, pady=20)
-        ttk.Button(nav, text="Atrás", command=parent.prev_page).pack(side="left", padx=10)
-        ttk.Button(nav, text="Cerrar Asistente", command=parent.destroy).pack(side="right", padx=10)
+        ttk.Button(nav, text="Volver al Menú", command=lambda: self.controller.show_menu_principal()).pack(side="left", padx=10)
+        ttk.Button(nav, text="Cerrar Asistente", command=self.controller.destroy).pack(side="right", padx=10)
 
     def choose_folder(self):
         folder = filedialog.askdirectory()

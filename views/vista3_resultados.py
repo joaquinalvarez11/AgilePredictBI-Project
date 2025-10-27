@@ -7,7 +7,7 @@ import pandas as pd
 from sklearn.linear_model import LinearRegression # Importamos para una simulación más cercana a ML
 
 class VistaResultados(ttk.Frame):
-    def __init__(self, parent):
+    def __init__(self, parent, controller):
         super().__init__(parent)
         self.parent = parent
         self.fig = None
@@ -30,8 +30,8 @@ class VistaResultados(ttk.Frame):
 
         nav = ttk.Frame(self)
         nav.grid(row=2, column=0, pady=20)
-        ttk.Button(nav, text="Atrás", command=parent.prev_page).pack(side="left", padx=10)
-        ttk.Button(nav, text="Siguiente", command=parent.next_page).pack(side="right", padx=10)
+        ttk.Button(nav, text="Volver al Menú", command=lambda: controller.show_menu_principal()).pack(side="left", padx=10)
+        ttk.Button(nav, text="Exportar", command=lambda: controller.show_export_view()).pack(side="right", padx=10)
 
     def perform_predictive_analysis(self):
         # Limpiar el frame de contenido si ya hay algo
@@ -48,7 +48,7 @@ class VistaResultados(ttk.Frame):
 
         if traffic_df is None or accidents_df is None:
             messagebox.showwarning("Datos Faltantes", "Por favor, cargue ambos CSV (Tráfico y Siniestralidad) en la página anterior.")
-            self.parent.prev_page() # Volver a la página anterior
+            controller.show_menu_principal() # O la vista donde se cargan los CSVs
             return
         
         # Simulación de Unión y Preprocesamiento

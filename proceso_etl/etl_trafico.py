@@ -1,7 +1,9 @@
 import pandas as pd
-from utils.config_carga import BRUTOS_PATH, LIMPIOS_PATH
 import re
 import os # TODO: Reemplazar librería "os" por "gestion_archivos.py" cuando tenga funcionalidad
+from pathlib import Path
+from datetime import datetime
+from config_manager import obtener_ruta
 
 class ETLTrafico():
     # TODO: Mover este diccionario en otro modulo
@@ -17,47 +19,81 @@ class ETLTrafico():
     }
 
     def __init__(self):
-        self.__ruta_bruta = BRUTOS_PATH + '/Tráfico Mensual/' # Ruta de la carpeta de tráfico mensual bruto
-        self.__ruta_limpia = LIMPIOS_PATH + '/Tráfico Mensual/' # Ruta de la carpeta de tráfico mensual limpio
+        """Inicializa las rutas usando el config_manager."""
+        base_limpios = obtener_ruta('ruta_csv_limpio')
+        self.__ruta_limpia_base = os.path.join(base_limpios, 'Trafico Mensual/')
+        os.makedirs(self.__ruta_limpia_base, exist_ok=True)
+        self.__log("ETL de Tráfico inicializada.")
     
+    def __log(self, msg):
+        """Imprime un mensaje con marca de tiempo específico para esta clase."""
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"[{now}] [ETL Trafico] {msg}")
+
     # Método principal para la transformación
-    def ejecutar_etl(self):
-        # TODO: Reemplazar todos los métodos "os" con los de gestion_archivos.py
-        # Bucle para cada año
-        for anio in sorted(os.listdir(self.__ruta_bruta)):
-            ruta_anio_bruto = os.path.join(self.__ruta_bruta, anio)
-            ruta_anio_limpio = os.path.join(self.__ruta_limpia, anio)
-            os.makedirs(ruta_anio_limpio, exist_ok=True)
-            
-            # Bucle para guardar archivo en la carpeta
-            for archivo in sorted(os.listdir(ruta_anio_bruto)):
-                nombre_base = os.path.splitext(archivo)[0]
-                ruta_excel = os.path.join(ruta_anio_bruto, archivo)
-                ruta_csv = os.path.join(ruta_anio_limpio, f"{nombre_base}.csv")
+    def procesar_archivo(self, ruta_archivo_excel):
+        """
+        Punto de entrada para el controlador. Procesa un único archivo de tráfico.
+        """
+        self.__log(f"Iniciando procesamiento para: {ruta_archivo_excel}")
+        nombre_base = Path(ruta_archivo_excel).stem
+        anio_str = self.__extraer_anio_de_ruta(ruta_archivo_excel)
+        if not anio_str:
+            self.__log(f"ADVERTENCIA: No se pudo determinar el año para '{nombre_base}'. Se guardará en la raíz de 'Trafico'.")
+            anio_str = "" # Guardar en la raíz de __ruta_limpia_base si no se encuentra año
+        ruta_salida_anio = os.path.join(self.__ruta_limpia_base, anio_str)
+        os.makedirs(ruta_salida_anio, exist_ok=True)
+        ruta_csv_salida = os.path.join(ruta_salida_anio, f"{nombre_base}_Limpio.csv")
 
-                if os.path.exists(ruta_csv):
-                    continue # La transformación existe, pasar al siguiente bucle
+        if os.path.exists(ruta_csv_salida):
+            self.__log(f"El archivo '{nombre_base}' ya ha sido procesado. Saltando.")
+            return True
 
-                if not self.__es_hoja_valida(ruta_excel):
-                    continue # La hoja no es válida, pasar al siguiente bucle
+        if not self.__es_hoja_valida(ruta_archivo_excel):
+            self.__log(f"ADVERTENCIA: El archivo '{nombre_base}' no contiene hojas de cálculo válidas. Saltando.")
+            # Devolvemos True porque no es un error, simplemente no hay nada que procesar.
+            return True
 
-                df_transformado = self.__transformar_excel(ruta_excel)
-                df_transformado.to_csv(ruta_csv, index=False, encoding='utf-8-sig')
+        try:
+            df_transformado = self.__transformar_excel(ruta_archivo_excel)
+            if df_transformado.empty:
+                 self.__log(f"La transformación de '{nombre_base}' no produjo datos. Saltando guardado.")
+                 return True
+
+            df_transformado.to_csv(ruta_csv_salida, index=False, encoding='utf-8-sig')
+            self.__log(f"Éxito: '{nombre_base}' procesado ({len(df_transformado)} filas). Guardado en '{anio_str}'.")
+            return True
+        except Exception as e:
+            self.__log(f"ERROR CRÍTICO procesando '{nombre_base}': {e}")
+            raise e
     
     # Métodos privados
     # Método para revisar si la primera hoja es válida
     def __es_hoja_valida(self, ruta_excel):
         try:
-            xls = pd.ExcelFile(ruta_excel)
+            engine = 'xlrd' if ruta_excel.lower().endswith('.xls') else 'openpyxl'
+            xls = pd.ExcelFile(ruta_excel, engine=engine)
             for hoja in xls.sheet_names:
-                if hoja.startswith('1') or hoja[0].isdigit():
-                    return True # La hoja empieza con "1". Es válida
-            return False # No se encontró ninguna hoja válida
-        
-        except Exception:
-            return False # El archivo está corrupto o ilegible
+                nombre_limpio = hoja.strip()
+                if nombre_limpio and nombre_limpio[0].isdigit():
+                    return True
+            return False
+        except Exception as e:
+            self.__log(f"Error al verificar hojas en '{Path(ruta_excel).name}': {e}")
+            return False
     
     # Método para obtener año y mes desde el nombre del archivo
+    def __extraer_anio_de_ruta(self, ruta_archivo):
+        """Intenta extraer el año (carpeta 'YYYY') del path del archivo."""
+        try:
+            parts = Path(ruta_archivo).parts
+            for part in reversed(parts[:-1]):
+                if len(part) == 4 and part.isdigit():
+                    return part
+        except Exception as e:
+            self.__log(f"No se pudo extraer año de la ruta {ruta_archivo}: {e}")
+        return None
+
     def __extraer_fecha_desde_nombre(self, nombre_archivo):
         # Separar estructura por año y mes
         partes = re.search(r'(\d{4})-(\d{2})', nombre_archivo)
@@ -74,7 +110,15 @@ class ETLTrafico():
     
     # Método para la transformación en bucle
     def __transformar_excel(self, ruta_excel):
-        xls = pd.ExcelFile(ruta_excel)
+        """Realiza la transformación ETL principal para un archivo de tráfico."""
+        self.__log(f"Transformando archivo: {Path(ruta_excel).name}")
+        engine = 'xlrd' if ruta_excel.lower().endswith('.xls') else 'openpyxl'
+        try:
+            xls = pd.ExcelFile(ruta_excel, engine=engine)
+        except Exception as e:
+             self.__log(f"Error fatal al abrir '{Path(ruta_excel).name}' (motor {engine}): {e}") # Usar __log
+             return None
+        
         hojas_validas = [hoja for hoja in xls.sheet_names if hoja.startswith('1') or hoja[0].isdigit()]
         orden_columnas = ['VehicleType', 'Date', 'Year', 'Month', 'Day', 'Hour', 'Direction', 'Count']
         dataframes = []
@@ -131,17 +175,23 @@ class ETLTrafico():
         # Reordenar columnas
         if dataframes:
             df_final = pd.concat(dataframes, ignore_index=True)
-            df_final = df_final[orden_columnas]
+            # Asegurar el orden final de columnas
+            df_final = df_final[[col for col in orden_columnas if col in df_final.columns]]
+            return df_final
         else:
-            df_final = pd.DataFrame(columns=orden_columnas)
-        
-        return df_final
+            self.__log(f"No se generaron datos válidos para el archivo '{nombre_archivo}'.")
+            return pd.DataFrame(columns=orden_columnas)
     
     # Método sólo como guía de la estructura excel
     def __inspeccionar_estructura(self, ruta_excel):
-        xls = pd.ExcelFile(ruta_excel)
-        hoja = [h for h in xls.sheet_names if h.startswith('1') or h[0].isdigit()][0]
-        df = xls.parse(hoja, skiprows=5, header=None)
-        print(f"Columnas detectadas: {df.shape[1]}")
-        print("Primeras 5 filas:")
-        print(df.head())
+        try:
+            engine = 'xlrd' if ruta_excel.lower().endswith('.xls') else 'openpyxl'
+            xls = pd.ExcelFile(ruta_excel, engine=engine)
+            hoja = [h for h in xls.sheet_names if h.startswith('1') or h[0].isdigit()][0]
+            df = xls.parse(hoja, skiprows=5, header=None)
+            print(f"Columnas detectadas: {df.shape[1]}")
+            print("Primeras 5 filas:")
+            print(df.head())
+        except Exception as e:
+            self.__log(f"Error en inspección: {e}")
+    
