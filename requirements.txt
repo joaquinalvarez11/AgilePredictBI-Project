@@ -1,1 +1,2 @@
 # Librerías necesarias para funcionar
+xlrd
