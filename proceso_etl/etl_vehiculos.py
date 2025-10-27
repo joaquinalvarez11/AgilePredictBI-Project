@@ -111,11 +111,11 @@ class ETLVehiculos():
         # === 5. Eliminar filas completamente vacías ===
         df = df.dropna(how="all")
 
-    # === 6. Limpiar valores "SIN ANTECEDENTES" ===
-    cols_to_clean = ["Tipo Vehículo", "Servicio", "Maniobra", "Consecuencia", "Pista/Vía"]
-    for col in cols_to_clean:
-        if col in df.columns:
-            df[col] = df[col].str.strip().str.upper().replace("SIN ANTECEDENTES", None)
+        # === 6. Limpiar valores "SIN ANTECEDENTES" ===
+        cols_to_clean = ["Tipo Vehículo", "Servicio", "Maniobra", "Consecuencia", "Pista/Vía"]
+        for col in cols_to_clean:
+            if col in df.columns:
+                df[col] = df[col].str.strip().str.upper().replace("SIN ANTECEDENTES", None)
 
         # === 7. Normalizar "Pista/Vía" ===
         if "Pista/Vía" in df.columns:
@@ -123,14 +123,13 @@ class ETLVehiculos():
             df = df.assign(**{"Pista/Vía": df["Pista/Vía"].str.split("-")}).explode("Pista/Vía")
             df["Pista/Vía"] = pd.to_numeric(df["Pista/Vía"], errors="coerce")
 
-    # === 8. Rellenar "Código Accidente" ===
-    if "Código Accidente" in df.columns:
-        df["Código Accidente"] = df["Código Accidente"].replace("nan", None)
-        df["Código Accidente"] = df["Código Accidente"].fillna(method="ffill")
+        # === 8. Rellenar "Código Accidente" ===
+        if "Código Accidente" in df.columns:
+            df["Código Accidente"] = df["Código Accidente"].replace("nan", None).ffill()
 
-    # === 9. Limpiar "Patente" ===
-    if "Patente" in df.columns:
-        df["Patente"] = df["Patente"].str.replace("-", "", regex=False).str.replace(" ", "", regex=False)
+        # === 9. Limpiar "Patente" ===
+        if "Patente" in df.columns:
+            df["Patente"] = df["Patente"].str.replace("-", "", regex=False).str.replace(" ", "", regex=False)
 
         # === 10. Crear campo "ID Accidente" ===
         df = df.reset_index(drop=True)
