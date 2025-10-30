@@ -87,11 +87,6 @@ class ETLTrafico():
             xls = pd.ExcelFile(ruta_excel, engine=engine)
             hojas_validas = self.__filtrar_hojas_validas(xls.sheet_names)
             return len(hojas_validas) > 0
-            # for hoja in xls.sheet_names:
-            #     nombre_limpio = hoja.strip()
-            #     if nombre_limpio and nombre_limpio[0].isdigit():
-            #         return True
-            # return False
         except Exception as e:
             self.__log(f"Error al verificar hojas en '{Path(ruta_excel).name}': {e}")
             return False
