@@ -68,16 +68,30 @@ class ETLTrafico():
             raise e
     
     # Métodos privados
+    # Método para la filtración de hojas válidas
+    def __filtrar_hojas_validas(self, sheet_names):
+        hojas_validas = []
+        
+        for hoja in sheet_names:
+            partes = hoja.strip().split()
+            # Validar si es numérico y mayor que 0
+            if partes and partes[0].isdigit() and int(partes[0]) > 0:
+                hojas_validas.append(hoja)
+        
+        return hojas_validas
+    
     # Método para revisar si la primera hoja es válida
     def __es_hoja_valida(self, ruta_excel):
         try:
             engine = 'xlrd' if ruta_excel.lower().endswith('.xls') else 'openpyxl'
             xls = pd.ExcelFile(ruta_excel, engine=engine)
-            for hoja in xls.sheet_names:
-                nombre_limpio = hoja.strip()
-                if nombre_limpio and nombre_limpio[0].isdigit():
-                    return True
-            return False
+            hojas_validas = self.__filtrar_hojas_validas(xls.sheet_names)
+            return len(hojas_validas) > 0
+            # for hoja in xls.sheet_names:
+            #     nombre_limpio = hoja.strip()
+            #     if nombre_limpio and nombre_limpio[0].isdigit():
+            #         return True
+            # return False
         except Exception as e:
             self.__log(f"Error al verificar hojas en '{Path(ruta_excel).name}': {e}")
             return False
@@ -101,6 +115,8 @@ class ETLTrafico():
             anio = int(partes.group(1))
             mes = int(partes.group(2))
             return anio, mes
+        
+        self.__log(f"ADVERTENCIA: No se pudo extraer año/mes desde el nombre '{nombre_archivo}'")
         return None, None
     
     # Método para la traducción del nombre de la hoja excel
@@ -119,7 +135,7 @@ class ETLTrafico():
              self.__log(f"Error fatal al abrir '{Path(ruta_excel).name}' (motor {engine}): {e}") # Usar __log
              return None
         
-        hojas_validas = [hoja for hoja in xls.sheet_names if hoja.startswith('1') or hoja[0].isdigit()]
+        hojas_validas = self.__filtrar_hojas_validas(xls.sheet_names)
         orden_columnas = ['VehicleType', 'Date', 'Year', 'Month', 'Day', 'Hour', 'Direction', 'Count']
         dataframes = []
 
@@ -162,7 +178,7 @@ class ETLTrafico():
             # TODO: Registrar información para el log
             num_invalidas = df_largo['Date'].isna().sum()
             if num_invalidas > 0:
-                print(f"[{nombre_archivo} - {hoja}] advertencia: Se excluyeron {num_invalidas} filas con fechas inválidas")
+                self.__log(f"[{nombre_archivo} - {hoja}] Se excluyeron {num_invalidas} filas con fecha inválidas")
 
             # Filtrar solo fechas válidas
             df_largo = df_largo[df_largo['Date'].notna()]
@@ -187,11 +203,10 @@ class ETLTrafico():
         try:
             engine = 'xlrd' if ruta_excel.lower().endswith('.xls') else 'openpyxl'
             xls = pd.ExcelFile(ruta_excel, engine=engine)
-            hoja = [h for h in xls.sheet_names if h.startswith('1') or h[0].isdigit()][0]
-            df = xls.parse(hoja, skiprows=5, header=None)
+            hojas_validas = self.__filtrar_hojas_validas(xls.sheet_names)
+            df = xls.parse(hojas_validas[0], skiprows=5, header=None)
             print(f"Columnas detectadas: {df.shape[1]}")
             print("Primeras 5 filas:")
             print(df.head())
         except Exception as e:
             self.__log(f"Error en inspección: {e}")
-    
