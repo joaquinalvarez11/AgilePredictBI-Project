@@ -1,2 +1,3 @@
 # Librerías necesarias para funcionar
 xlrd
+PyPDF2

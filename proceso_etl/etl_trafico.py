@@ -8,7 +8,7 @@ from config_manager import obtener_ruta
 class ETLTrafico():
     # TODO: Mover este diccionario en otro modulo
     # Diccionario constante para traducción del nombre de cada hoja
-    __DICCIONARIO_TIPO_VEHICULO = {
+    __CATEGORIA_VEHICULO = {
         '1 MOTO': 'Moto',
         '2 AUTOCMTA': 'Auto/Camioneta',
         '3 CAMION 2 EJES CTA RD': 'Camión 2 Ejes Cta/Rd',
@@ -115,9 +115,9 @@ class ETLTrafico():
         return None, None
     
     # Método para la traducción del nombre de la hoja excel
-    def __traducir_tipo_vehiculo(self, nombre_hoja):
+    def __traducir_categoria_vehiculo(self, nombre_hoja):
         nombre = nombre_hoja.strip().upper()
-        return self.__DICCIONARIO_TIPO_VEHICULO.get(nombre, nombre_hoja.title())
+        return self.__CATEGORIA_VEHICULO.get(nombre, nombre_hoja.title())
     
     # Método para la transformación en bucle
     def __transformar_excel(self, ruta_excel):
@@ -131,7 +131,7 @@ class ETLTrafico():
              return None
         
         hojas_validas = self.__filtrar_hojas_validas(xls.sheet_names)
-        orden_columnas = ['VehicleType', 'Date', 'Year', 'Month', 'Day', 'Hour', 'Direction', 'Count']
+        orden_columnas = ['Categoria', 'TipoVehiculo', 'Fecha', 'Anio', 'Mes', 'Dia', 'Hora', 'Direccion', 'Contar']
         dataframes = []
 
         # Extraer año y mes del nombre del archivo
@@ -146,40 +146,47 @@ class ETLTrafico():
 
             # Renombrar columnas
             columna_hora = [str(h) for h in range(24)]
-            df.columns = ['Col0', 'DiaRaw', 'Direction'] + columna_hora
+            df.columns = ['Col0', 'DiaRaw', 'Direccion'] + columna_hora
 
             # Propagar día hacia abajo
-            df['Day'] = df['DiaRaw'].ffill()
+            df['Dia'] = df['DiaRaw'].ffill()
 
             # Filtrar sólo las filas con direction válido
-            df = df[df['Direction'].isin(['ASCENDENTE', 'DESCENDENTE'])].copy()
+            df = df[df['Direccion'].isin(['ASCENDENTE', 'DESCENDENTE'])].copy()
 
             # Reorganizar el dataframe en filas
-            df_largo = df.melt(id_vars=['Day', 'Direction'], value_vars=columna_hora, var_name='Hour', value_name='Count')
+            df_largo = df.melt(id_vars=['Dia', 'Direccion'], value_vars=columna_hora, var_name='Hora', value_name='Contar')
 
             # Limpieza final
-            df_largo['Day'] = pd.to_numeric(df_largo['Day'], errors='coerce').fillna(-1).astype(int)
-            df_largo = df_largo[df_largo['Day'] != -1] # Excluir días no válidas
+            df_largo['Dia'] = pd.to_numeric(df_largo['Dia'], errors='coerce').fillna(-1).astype(int)
+            df_largo = df_largo[df_largo['Dia'] != -1] # Excluir días no válidas
 
-            df_largo['Hour'] = pd.to_numeric(df_largo['Hour'], errors='coerce').fillna(-1).astype(int)
-            df_largo = df_largo[df_largo['Hour'].between(0, 23)]
+            df_largo['Hora'] = pd.to_numeric(df_largo['Hora'], errors='coerce').fillna(-1).astype(int)
+            df_largo = df_largo[df_largo['Hora'].between(0, 23)]
 
-            df_largo['Count'] = pd.to_numeric(df_largo['Count'], errors='coerce').fillna(0).astype(int)
+            df_largo['Contar'] = pd.to_numeric(df_largo['Contar'], errors='coerce').fillna(0).astype(int)
 
-            df_largo['Year'] = anio
-            df_largo['Month'] = mes
-            df_largo['Date'] = pd.to_datetime({'year': df_largo['Year'], 'month': df_largo['Month'], 'day': df_largo['Day']}, errors='coerce')
+            df_largo['Anio'] = anio
+            df_largo['Mes'] = mes
+            df_largo['Fecha'] = pd.to_datetime({'year': df_largo['Anio'], 'month': df_largo['Mes'], 'day': df_largo['Dia']}, errors='coerce')
 
-            # TODO: Registrar información para el log
-            num_invalidas = df_largo['Date'].isna().sum()
+            num_invalidas = df_largo['Fecha'].isna().sum()
             if num_invalidas > 0:
                 self.__log(f"[{nombre_archivo} - {hoja}] Se excluyeron {num_invalidas} filas con fecha inválidas")
 
             # Filtrar solo fechas válidas
-            df_largo = df_largo[df_largo['Date'].notna()]
+            df_largo = df_largo[df_largo['Fecha'].notna()]
             
-            # Metadato del tipo de vehículo
-            df_largo['VehicleType'] = self.__traducir_tipo_vehiculo(hoja)
+            # Metadato de la categoría del vehículo
+            categoria = self.__traducir_categoria_vehiculo(hoja)
+            df_largo['Categoria'] = categoria
+
+            if categoria in ['Moto', 'Auto/Camioneta']:
+                tipo = 'Ligero'
+            else:
+                tipo = 'Pesado'
+            
+            df_largo['TipoVehiculo'] = tipo
 
             dataframes.append(df_largo)
         
