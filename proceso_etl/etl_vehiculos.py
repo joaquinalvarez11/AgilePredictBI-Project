@@ -107,14 +107,16 @@ class ETLVehiculos():
         # Renombrar solo las columnas existentes para evitar errores
         df = df.rename(columns={k: v for k, v in column_renames.items() if k in df.columns})
 
-        # === 4. Convertir columnas a string y limpiar espacios ===
+        # === 4. Eliminar filas completamente vacías ===
+        self.__log("Eliminando filas basura (sin Patente Y sin Marca)...")
+        df = df.dropna(subset=['Código Accidente', 'Patente', 'Marca'], how='all').reset_index(drop=True) # Resetear índice aquí
+
+        # === 5. Convertir columnas a string y limpiar espacios ===
         text_cols = list(column_renames.values()) # Usar nombres nuevos
         for col in text_cols:
             if col in df.columns:
                 df[col] = df[col].astype(str).str.strip()
-
-        # === 5. Eliminar filas completamente vacías ===
-        df = df.dropna(how="all").reset_index(drop=True) # Resetear índice aquí
+                df[col] = df[col].replace(['nan', 'None', ''], np.nan, regex=False)
 
         # === 6. Limpiar valores "SIN ANTECEDENTES" ===
         cols_to_clean = ["Tipo Vehículo", "Servicio", "Maniobra", "Consecuencia", "Pista/Vía"]
@@ -147,16 +149,19 @@ class ETLVehiculos():
 
         # === 10. Crear campo "ID Accidente" ===
         # Asegurarse que 'Código Accidente' existe y tiene valores válidos
+        self.__log("Generando 'ID Accidente'...")
         if "Código Accidente" in df.columns and not df["Código Accidente"].isna().all():
             codigos_validos = df["Código Accidente"].dropna().unique()
             mapa_ids = {}
             for i, codigo in enumerate(codigos_validos, start=1):
-                try:
-                    # Intentar convertir a int para limpiar '.0' y luego formatear
-                    codigo_fmt = str(int(float(codigo))).zfill(3)
-                except (ValueError, TypeError):
-                    # Si no es numérico, usar tal cual (rellenando si es corto)
-                    codigo_fmt = str(codigo).zfill(3)
+                match_num = re.search(r'(\d+)', str(codigo))
+                if match_num:
+                    # Tomar el número encontrado
+                    num_str = match_num.group(1)
+                    # Convertir a int (para quitar ceros ej '01'->1) y reformatear
+                    codigo_fmt = str(int(num_str)).zfill(3)
+                else:
+                    codigo_fmt = str(i).zfill(3)
                 mapa_ids[codigo] = f"ACC-{prefijo_fecha}-{codigo_fmt}"
             df["ID Accidente"] = df["Código Accidente"].map(mapa_ids)
         else:
