@@ -215,6 +215,37 @@ class ETLSiniestralidad():
 
     def __limpieza_inicial(self, df, prefijo_fecha_para_id, anio_archivo):
         """Realiza los primeros pasos de limpieza, formato y creación de ID."""
+        # === NUEVO: Detectar y corregir columnas 'Luminosidad' y 'Estado Atmosférico' invertidas ===
+        try:
+            if "Luminosidad" in df.columns and "Estado Atmosférico" in df.columns:
+                self.__log("Iniciando chequeo de columnas invertidas (Luminosidad/Estado Atmosférico)...")
+                
+                # Estos son los únicos valores que 'Luminosidad' DEBERÍA tener.
+                valid_lum = {0, 1, 2, 3, 4} 
+                
+                # Convertir la columna 'Luminosidad' a números para chequear
+                lum_values_numeric = pd.to_numeric(df["Luminosidad"], errors='coerce')
+                
+                # Encontrar valores que NO están en el set válido (y no son NaN)
+                # Ej: Si encuentra 5 o 6, esta máscara será True
+                invalid_lum_mask = ~lum_values_numeric.isin(valid_lum) & lum_values_numeric.notna()
+                
+                if invalid_lum_mask.any():
+                    # Si hay CUALQUIER valor inválido (ej: 5, 6), asumimos que las columnas están cambiadas
+                    invalid_samples = list(lum_values_numeric[invalid_lum_mask].unique())[:3] # Muestra hasta 3
+                    self.__log(f"ADVERTENCIA: Detectados valores inválidos para 'Luminosidad' (ej: {invalid_samples}).")
+                    self.__log(">>> Asumiendo columnas 'Luminosidad' y 'Estado Atmosférico' invertidas. Realizando SWAP.")
+                    
+                    # Guardar temporalmente, hacer el swap
+                    lum_temp_data = df["Luminosidad"].copy()
+                    df["Luminosidad"] = df["Estado Atmosférico"]
+                    df["Estado Atmosférico"] = lum_temp_data
+                else:
+                    self.__log("Chequeo de columnas invertidas OK. No se requiere swap.")
+                    
+        except Exception as e_swap:
+            self.__log(f"ERROR durante el chequeo de columnas invertidas: {e_swap}")
+        
         self.__log("Iniciando limpieza y preparación de datos...")
         if "Km" in df.columns: df["Km"] = df["Km"].apply(self.__fix_km)
         if "Hora" in df.columns: df["Hora"] = df["Hora"].apply(self.__fix_time)
