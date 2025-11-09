@@ -6,6 +6,7 @@ from datetime import datetime, date, time
 from pathlib import Path
 import csv
 from config_manager import obtener_ruta
+import re
 
 
 class ETLSiniestralidad():
@@ -163,9 +164,30 @@ class ETLSiniestralidad():
             self.__log("Error: No se pudo leer la hoja o encontrar el encabezado 'Correlativo'.")
             return None # Devolver None para indicar fallo controlado
 
+        # Se usará esta fecha para TODOS los IDs del archivo, unificando el criterio
+        nombre_archivo = Path(ruta_excel).name
+        match_texto = re.search(r"(\d{2})\s+\w+\s+(\d{4})", nombre_archivo) # Ej: "06 Junio 2021"
+        match_num = re.search(r"(\d{4})[-_]?(\d{2})", nombre_archivo) # Ej: "2021-06" o "202106"
+
+        prefijo_fecha_archivo = "000000"
+        anio_archivo = "1900" # Default por si no se encuentra
+
+        if match_texto:
+            mes = match_texto.group(1)
+            anio_archivo = match_texto.group(2)
+            prefijo_fecha_archivo = f"{anio_archivo}{mes}"
+        elif match_num:
+            anio_archivo = match_num.group(1)
+            prefijo_fecha_archivo = f"{anio_archivo}{match_num.group(2)}"
+        else:
+            self.__log(f"ADVERTENCIA: No se pudo extraer AñoMes del nombre '{nombre_archivo}'. Se usará '000000' para IDs y '1900' para fechas.")
+
+        self.__log(f"Se usará el prefijo '{prefijo_fecha_archivo}' para IDs y el año '{anio_archivo}' para fechas sin año.")
+
         # 2. Limpieza inicial
         df = df.rename(columns=self.__RENAMINGS)
-        df = self.__limpieza_inicial(df)
+        # === Pasar prefijos a la limpieza inicial ===
+        df = self.__limpieza_inicial(df, prefijo_fecha_archivo, anio_archivo)
         if df.empty:
              self.__log("DataFrame vacío después de la limpieza inicial.")
              return None
@@ -191,7 +213,7 @@ class ETLSiniestralidad():
         self.__log(f"Transformación completada exitosamente. {len(df)} filas generadas.")
         return df
 
-    def __limpieza_inicial(self, df):
+    def __limpieza_inicial(self, df, prefijo_fecha_para_id, anio_archivo):
         """Realiza los primeros pasos de limpieza, formato y creación de ID."""
         self.__log("Iniciando limpieza y preparación de datos...")
         if "Km" in df.columns: df["Km"] = df["Km"].apply(self.__fix_km)
@@ -212,13 +234,17 @@ class ETLSiniestralidad():
 
         # Conversión de tipos
         df["Correlativo"] = pd.to_numeric(df["Correlativo"], errors='coerce').astype('Int64')
-        df["Fecha"] = pd.to_datetime(df["Fecha"], errors="coerce").dt.date
+        # ===  Usar función robusta __fix_fecha ===
+        self.__log(f"Normalizando columna 'Fecha' usando el año default: {anio_archivo}")
+        df["Fecha"] = df["Fecha"].apply(self.__fix_fecha, anio_default=anio_archivo)
         for col in ["P6", "P4", "P2", "P1", "P3", "P5", "Tramo"]:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
 
-        # Creación de ID Accidente
-        df["ID Accidente"] = df.apply(self.__make_id_acc, axis=1)
+        # Crear ID Accidente con fecha de archivo
+        self.__log(f"Generando 'ID Accidente' con prefijo: {prefijo_fecha_para_id}")
+        df["ID Accidente"] = df["Correlativo"].apply(
+            lambda correl: f"ACC-{prefijo_fecha_para_id}-{correl:03d}" if pd.notna(correl) else None)
         self.__log("Preparación inicial completada.")
         return df
 
@@ -361,7 +387,6 @@ class ETLSiniestralidad():
     # Funciones como métodos privadas
     
     def __fix_km(self, value):
-        # ... (código de la función fix_km) ...
         if pd.isna(value): return np.nan
         s = str(value).strip().replace("–", "-")
         if "+" in s:
@@ -376,7 +401,6 @@ class ETLSiniestralidad():
         except (ValueError, TypeError): return np.nan
 
     def __fix_time(self, v):
-        # ... (código de la función fix_time) ...
         if pd.isna(v): return pd.NaT
         if isinstance(v, (pd.Timestamp, datetime)): return pd.to_datetime(v).time()
         if isinstance(v, (int, float)):
@@ -390,8 +414,53 @@ class ETLSiniestralidad():
         try: return pd.to_datetime(s, errors="coerce").time()
         except Exception: return pd.NaT
 
+    def __fix_fecha(self, value, anio_default):
+        """
+        Intenta normalizar una fecha que puede venir en múltiples formatos
+        (DD/MM/YY, DD-MM-YY, DD.MM, DD-MM, números seriales de Excel, etc.).
+        Usa 'anio_default' (del nombre de archivo) si la fecha no tiene año.
+        """
+        if pd.isna(value):
+            return pd.NaT
+
+        # 1. Si ya es una fecha (leída correctamente por pandas)
+        if isinstance(value, (datetime, date)):
+            return value.date() if isinstance(value, datetime) else value
+
+        # 2. Si es un número serial de Excel (común en .xls)
+        if isinstance(value, (int, float)):
+            try:
+                # El origen de fechas de Excel en Windows es 1899-12-30
+                return pd.to_datetime(value, unit='D', origin='1899-12-30').date()
+            except Exception:
+                # Si falla, podría ser un float como 13.01 (13 de enero), tratar como string
+                pass 
+
+        # 3. Tratar como string para formatos DD/MM/YY, DD/MM, DD.MM, etc.
+        s = str(value).strip().replace('.', '/').replace('-', '/')
+        parts = s.split('/')
+
+        try:
+            if len(parts) == 3: # Formato "DD/MM/YY" o "DD/MM/YYYY"
+                d, m, y = int(parts[0]), int(parts[1]), int(parts[2])
+                if y < 100: y += 2000 # Convierte "16" a "2016"
+                return date(y, m, d)
+
+            if len(parts) == 2: # Formato "DD/MM" (ej: "13.1" o "13-01")
+                d, m = int(parts[0]), int(parts[1])
+                y = int(anio_default) # Usar el año del nombre del archivo
+                return date(y, m, d)
+        except Exception:
+            # Falló el parseo manual
+            pass
+
+        # 4. Último intento: dejar que Pandas intente con dayfirst=True
+        try:
+            return pd.to_datetime(s, errors='coerce', dayfirst=True).date()
+        except Exception:
+            return pd.NaT # Falla definitiva
+
     def __split_and_explode(self, df, column, new_column):
-        # ... (código de la función split_and_explode) ...
         if column not in df.columns: return df
         df_copy = df.copy()
         df_copy[new_column] = df_copy[column].astype(str).replace({'nan': None, 'None': None})
