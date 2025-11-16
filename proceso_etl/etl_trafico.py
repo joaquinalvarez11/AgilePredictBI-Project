@@ -114,6 +114,23 @@ class ETLTrafico():
         self.__log(f"ADVERTENCIA: No se pudo extraer año/mes desde el nombre '{nombre_archivo}'")
         return None, None
     
+    def __extraer_plaza_desde_nombre(self, nombre_archivo):
+        """Extrae el nombre de la plaza (peaje) desde el nombre del archivo."""
+        nombre_lower = nombre_archivo.lower()
+        
+        if 'cachiyuyo' in nombre_lower:
+            return 'Cachiyuyo'
+            
+        if 'punta colorada' in nombre_lower:
+            return 'Punta Colorada'
+        if 'colorada' in nombre_lower:
+            return 'Punta Colorada'
+        if 'punta' in nombre_lower:
+            return 'Punta Colorada'
+            
+        self.__log(f"ADVERTENCIA: No se pudo determinar la Plaza para '{nombre_archivo}'. Se usará 'Desconocida'.")
+        return 'Desconocida'
+
     # Método para la traducción del nombre de la hoja excel
     def __traducir_categoria_vehiculo(self, nombre_hoja):
         nombre = nombre_hoja.strip().upper()
@@ -131,12 +148,13 @@ class ETLTrafico():
              return None
         
         hojas_validas = self.__filtrar_hojas_validas(xls.sheet_names)
-        orden_columnas = ['Categoria', 'TipoVehiculo', 'Fecha', 'Anio', 'Mes', 'Dia', 'Hora', 'Direccion', 'Contar']
+        orden_columnas = ['Plaza', 'Categoria', 'TipoVehiculo', 'Fecha', 'Anio', 'Mes', 'Dia', 'Hora', 'Direccion', 'Contar']
         dataframes = []
 
-        # Extraer año y mes del nombre del archivo
+        # Extraer año, mes y plaza del nombre del archivo
         nombre_archivo = os.path.basename(ruta_excel)
         anio, mes = self.__extraer_fecha_desde_nombre(nombre_archivo)
+        plaza = self.__extraer_plaza_desde_nombre(nombre_archivo)
         
         for hoja in hojas_validas:
             # Cargar desde la fila 6
@@ -187,6 +205,8 @@ class ETLTrafico():
                 tipo = 'Pesado'
             
             df_largo['TipoVehiculo'] = tipo
+
+            df_largo['Plaza'] = plaza
 
             dataframes.append(df_largo)
         
