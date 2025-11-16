@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np # Asegurar importación de numpy
+import unicodedata
 import os
 import re
 from pathlib import Path
@@ -20,6 +21,12 @@ class ETLVehiculos():
         """Imprime un mensaje con marca de tiempo para consistencia."""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         print(f"[{now}] [ETL Vehiculos] {msg}")
+
+    def __sin_tildes(self, txt: str):
+        if pd.isna(txt):
+            return txt
+        # Normaliza y remueve diacríticos (tildes/¨/´)
+        return unicodedata.normalize("NFKD", txt).encode("ASCII", "ignore").decode("ASCII")
 
     # --- Método público ---
     def procesar_archivo(self, ruta_archivo_excel):
@@ -107,6 +114,18 @@ class ETLVehiculos():
         # Renombrar solo las columnas existentes para evitar errores
         df = df.rename(columns={k: v for k, v in column_renames.items() if k in df.columns})
 
+
+        # === NUEVO PASO: ELIMINAR FILAS FANTASMAS REALES ===
+        # 1) Reemplazar valores vacíos o espacios
+        df = df.replace(r'^\s*$', np.nan, regex=True)
+
+        # 2) Eliminar filas donde TODAS las columnas excepto "Código Accidente" están vacías
+        cols_datos = ["Tipo Vehículo", "Servicio", "Maniobra", "Consecuencia", "Pista/Vía", "Patente", "Marca"]
+        cols_datos = [c for c in cols_datos if c in df.columns]  # Seguridad
+
+        df = df.dropna(subset=cols_datos, how="all").reset_index(drop=True)
+
+
         # === 4. Eliminar filas completamente vacías ===
         self.__log("Eliminando filas basura (sin Patente Y sin Marca)...")
         df = df.dropna(subset=['Código Accidente', 'Patente', 'Marca'], how='all').reset_index(drop=True) # Resetear índice aquí
@@ -124,7 +143,12 @@ class ETLVehiculos():
             if col in df.columns:
                 df[col] = df[col].str.strip().str.upper().replace("SIN ANTECEDENTES", None)
 
-        # === 7. Normalizar "Pista/Vía" ===
+        # === 7. Rellenar "Código Accidente" ===
+        if "Código Accidente" in df.columns:
+            # Asegurarse de reemplazar 'nan' y 'None' strings antes de ffill
+            df["Código Accidente"] = df["Código Accidente"].replace(['nan', 'None'], np.nan).ffill()
+
+        # === 8. Normalizar "Pista/Vía" ===
         if "Pista/Vía" in df.columns:
             # Reemplazar ' y ' solo si existe, manejar NaN
             df["Pista/Vía"] = df["Pista/Vía"].str.lower().str.replace(" y ", "-", regex=False)
@@ -135,10 +159,6 @@ class ETLVehiculos():
             df["Pista/Vía"] = pd.to_numeric(df["Pista/Vía_split"].str.strip(), errors="coerce")
             df = df.drop(columns=["Pista/Vía_split"]) # Eliminar columna temporal
 
-        # === 8. Rellenar "Código Accidente" ===
-        if "Código Accidente" in df.columns:
-            # Asegurarse de reemplazar 'nan' y 'None' strings antes de ffill
-            df["Código Accidente"] = df["Código Accidente"].replace(['nan', 'None'], np.nan).ffill()
 
         # === 9. Limpiar "Patente" ===
         if "Patente" in df.columns:
@@ -147,34 +167,50 @@ class ETLVehiculos():
             # Reemplazar 'nan' y 'None' strings con NaN real
             df["Patente"] = df["Patente"].replace(['nan', 'None'], np.nan, regex=False)
 
-        # === 10. Crear campo "ID Accidente" ===
-        # Asegurarse que 'Código Accidente' existe y tiene valores válidos
-        self.__log("Generando 'ID Accidente'...")
+        # === 10. Crear campo "ID Accidente" según cambios en Código Accidente ===
+        self.__log("Generando 'ID Accidente' por cambios reales en 'Código Accidente'...")
+
         if "Código Accidente" in df.columns and not df["Código Accidente"].isna().all():
-            codigos_validos = df["Código Accidente"].dropna().unique()
-            mapa_ids = {}
-            for i, codigo in enumerate(codigos_validos, start=1):
-                match_num = re.search(r'(\d+)', str(codigo))
-                if match_num:
-                    # Tomar el número encontrado
-                    num_str = match_num.group(1)
-                    # Convertir a int (para quitar ceros ej '01'->1) y reformatear
-                    codigo_fmt = str(int(num_str)).zfill(3)
-                else:
-                    codigo_fmt = str(i).zfill(3)
-                mapa_ids[codigo] = f"ACC-{prefijo_fecha}-{codigo_fmt}"
-            df["ID Accidente"] = df["Código Accidente"].map(mapa_ids)
+
+            # Normalizar Código Accidente:
+            # - string
+            # - mayúsculas
+            # - sin espacios internos (ACC 19 -> ACC19)
+            df["Código Accidente"] = df["Código Accidente"].astype(str).str.strip()
+            df["__cod_norm"] = (
+                df["Código Accidente"]
+                .str.upper()
+                .str.replace(r"\s+", "", regex=True)  # quita TODOS los espacios
+            )
+
+            # Marca TRUE cuando empieza un nuevo accidente:
+            # - en la primera fila
+            # - o cuando el código normalizado es distinto al de la fila anterior
+            es_nuevo_accidente = df["__cod_norm"] != df["__cod_norm"].shift(1)
+
+            # Correlativo ascendente: 1,1,1,...,2,2,2,...,3,3,...
+            df["__correlativo"] = es_nuevo_accidente.cumsum()
+
+            # Formatear correlativo a 3 dígitos
+            df["__correlativo"] = df["__correlativo"].astype(int).astype(str).str.zfill(3)
+
+            # Construir ID Accidente con el prefijo del archivo (AÑOMES)
+            df["ID Accidente"] = "ACC-" + prefijo_fecha + "-" + df["__correlativo"]
+
+            # Limpiar columnas auxiliares
+            df = df.drop(columns=["__cod_norm", "__correlativo"])
+
         else:
-            self.__log("Advertencia: No se pudo generar 'ID Accidente' por falta de 'Código Accidente' válido.")
-            df["ID Accidente"] = None # Crear columna nula si no se puede generar
+            df["ID Accidente"] = None
+
 
         # === 11. Reemplazar vacíos/NaN/representaciones de nulo por 0 (Numérico) ===
         self.__log("Reemplazando valores nulos/vacíos representativos por 0...")
         valores_a_reemplazar_por_cero = [
-            "SINPATENTE", "SIN PATENTE", "No registra", "NoRegistra", "Sin datos", "Sindatos",
-            "Sinantecedentes", "Sin antecedentes", # Ya deberían ser NaN por paso 6, pero por seguridad
-            "NAN", "nan", "None", "S/I", "", None, np.nan
-            # Añadir "NO REGISTRA", "NOREGISTRA" si es necesario
+            "SINPATENTE", "SIN PATENTE", "No registra", "NoRegistra", "Sin datos", "Sindatos","NO REGISTRA", "NOREGISTRA",
+            "Sinantecedentes", "Sin antecedentes", "SINANTEDECENTES", "SIN ANTECEDENTES",
+            "NAN", "nan", "None", "S/I", "-", "","N°0575902","NRO", None, np.nan
+            # Añadir mas si es necesario
         ]
         # Aplicar a todo el DataFrame (Patente y Marca se corregirán después)
         df = df.replace(valores_a_reemplazar_por_cero, 0)
@@ -196,13 +232,16 @@ class ETLVehiculos():
             self.__log("Aplicando limpieza avanzada a columna Marca...")
             # Quitar espacios internos ANTES de aplicar el diccionario
             df["Marca"] = df["Marca"].str.replace(" ", "", regex=False)
+            
+            # Quitar tildes/diacríticos en Marca (ej.: HYUNDAÍ -> HYUNDAI)
+            df["Marca"] = df["Marca"].apply(self.__sin_tildes)
 
             # Diccionario de correcciones
             correcciones_marcas = {
                  "SINANTECEDENTES":"SIN-ANTECEDENTES", "SINMARCA" : "SIN-ANTECEDENTES",
-                 "RANDON(REMOLQUE)":"REMOLQUE", "MACK(CAMABAJA)":"MACK", # Corregido Mack
+                 "RANDON(REMOLQUE)":"RANDON", "MACK(CAMABAJA)":"MACK", # Corregido Mack
                  "MITSUBICHI":"MITSUBISHI", "MITSUVISHI":"MITSUBISHI", "MITZUBISHI":"MITSUBISHI",
-                 "KIAMOTORS": "KIA", "KIAMOTOR": "KIA", "KÍAMOTORS": "KIA", "KIAFRONTIER" : "KIA-FRONTIER",
+                 "KIAMOTORS": "KIA", "KIAMOTOR": "KIA", "KÍAMOTORS": "KIA", "KIAFRONTIER" : "KIA",
                  "CHEBROLET": "CHEVROLET", "CARROHECHIZO": "REMOLQUE", "CARRODEREMOLQUE": "REMOLQUE",
                  "CHEROKEE": "JEEP", "INTER": "INTERNATIONAL", "MASDA": "MAZDA",
                  "DAFCL":"DAF", "MAC":"MACK", "FOR": "FORD", "BWW": "BMW",
@@ -210,20 +249,20 @@ class ETLVehiculos():
                  "SUSUKI.":"SUZUKI", "VW": "VOLKSWAGEN", "CAWASAKI": "KAWASAKI",
                  "WOLKSWAGEN": "VOLKSWAGEN", "GREALWALL": "GREAT-WALL", "GREATWALL": "GREAT-WALL",
                  "GREATWAL": "GREAT-WALL", "GREATWALT": "GREAT-WALL",
-                 "THERMOKINGRAMPLA": "THERMO-KING-RAMPLA", "TERMOKINGRAMPLA": "THERMO-KING-RAMPLA",
-                 "TERMOKINRAMPLA": "THERMO-KING-RAMPLA", "MERCEDEZ": "MERCEDES-BENZ",
+                 "THERMOKINGRAMPLA": "RAMPLA", "TERMOKINGRAMPLA": "RAMPLA",
+                 "TERMOKINRAMPLA": "RAMPLA", "MERCEDEZ": "MERCEDES-BENZ",
                  "MERCEDES": "MERCEDES-BENZ", "MERCEDESBENZ": "MERCEDES-BENZ",
-                 "MERCEDEZBENZ": "MERCEDES-BENZ", "PEUGEOTPARTNER":"PEUGEOT-PARTNER",
+                 "MERCEDEZBENZ": "MERCEDES-BENZ", "PEUGEOTPARTNER":"PEUGEOT",
                  "HARLEYDAVIDSON": "HARLEY-DAVIDSON",
                  "MORRIS GARAGE": "MORRIS-GARAGE",
                  "MORRISGARAGE": "MORRIS-GARAGE",
-                 "MITSUBICHIMONTERO":"MITSUBISHI-MONTERO", "HYUNDAI.": "HYUNDAI",
+                 "MITSUBICHIMONTERO":"MITSUBISHI", "HYUNDAI.": "HYUNDAI",
                  "CHEVROLET.": "CHEVROLET", "SUZUKI.": "SUZUKI", "KIA.": "KIA",
                  "PEUGEOT.": "PEUGEOT", "NISSAM":"NISSAN", "NISAN":"NISSAN",
                  "NISSNA":"NISSAN", "NISSSAN":"NISSAN", "TOYOTTA":"TOYOTA",
-                 "TOYOTAYARIS":"TOYOTA-YARIS", "HONDA.":"HONDA", "HODA":"HONDA",
+                 "TOYOTAYARIS":"TOYOTA", "HONDA.":"HONDA", "HODA":"HONDA",
                  "HYNDAI":"HYUNDAI", "HYUDAI":"HYUNDAI", "HYUDAHI":"HYUNDAI",
-                 "HYUNDAIACCENT":"HYUNDAI-ACCENT", "ISUZU.":"ISUZU", "DAIHATSU.":"DAIHATSU",
+                 "HYUNDAIACCENT":"HYUNDAI", "ISUZU.":"ISUZU", "DAIHATSU.":"DAIHATSU",
                  "DAEWOO.":"DAEWOO", "DAEWU":"DAEWOO", "DODGE.":"DODGE", "JAC.":"JAC",
                  "JEEP.":"JEEP", "JPE":"JEEP", "JEEPCHEROKEE":"JEEP-CHEROKEE",
                  "RENAULT.":"RENAULT", "RENO":"RENAULT", "RENAUL":"RENAULT",
@@ -233,12 +272,92 @@ class ETLVehiculos():
                  "CHEVROLETSAIL":"CHEVROLET-SAIL", "SUZUK":"SUZUKI", "SUSUKI":"SUZUKI",
                  "SUZIKI":"SUZUKI", "MITSUBI":"MITSUBISHI", "PEUJEOT":"PEUGEOT",
                  "VOLSWAGEN":"VOLKSWAGEN", "VOLKS":"VOLKSWAGEN", "VOLV":"VOLVO",
-                 "VOLV.":"VOLVO", "VOLVO.":"VOLVO"
+                 "VOLV.":"VOLVO", "VOLVO.":"VOLVO", 
+                 "FREIGTHLINER": "FREIGHTLINER", "FREIGTLINER": "FREIGHTLINER",
+                 "FREIGTLINER.": "FREIGHTLINER", "FREIGHTLINER.": "FREIGHTLINER",
+                 "FORDD":"FORD","OXFORD":"FORD", "VOLKWAGEN":"VOLKSWAGEN", "VOLKSAWAGEN":"VOLKSWAGEN",
+                 "HYUNDAYGETZ":"HYUNDAI", "HYUNDAPORTER":"HYUNDAI",
+                 "SUZUKY": "SUZUKI", "ZUZUKI": "SUZUKI", "SUSUKY": "SUZUKI",
+                 "ZUBARU": "SUBARU", "SAMSUM": "SAMSUNG","SAMNSUNG": "SAMSUNG",
+                 "GRANCHEROKEE": "JEEP", "GRANDCHEROKEE": "JEEP",
+                 "NOREGISTRA":"SIN-ANTECEDENTES",
+                 "INO":"HINO", "GACGONOW": "GAC-GONOW", "SSANYONG": "SSANGYONG","SSAINGYONG":"SSANGYONG",
+                 "NISSANNAVARA":"NISSAN", "NISSANCOROLA":"NISSAN",
+                 "SCANNIA": "SCANIA", "SECANIA": "SCANIA", "SCANIA.": "SCANIA", 
+                 "DAEWO": "DAEWOO", "TOYOTAHILUX":"TOYOTA", "TOYOTARUNNER":"TOYOTA",
+                 "TOYOTAURBAN": "TOYOTA", "MERCEDESACTRON":"MERCEDES-BENZ","MERCEDESACTROS":"MERCEDES-BENZ",
+                 "DOGDE": "DODGE","BRILLANCE":"BRILLIANCE", "DUCATE": "DUCATI", "FREIGHLINER":"FREIGHTLINER",
+                 "FORDCARGO":"FORD", "FORDFIESTA":"FORD", "FORDRANGER":"FORD",
+                 "SINANTEDECENTES":"SIN-ANTECEDENTES", "HIARIO": "SIN-ANTECEDENTES", "HILUX":"TOYOTA",
+                 "HIUNDAYELANTRA":"HYUNDAI", "HIUNDAI": "HYUNDAI","HYNDAY": "HYUNDAI",
+                 "KEMBORT": "KENWORTH","KENWORK":"KENWORTH","KIACERATO":"KIA","KIAMORNING":"KIA",
+                 "KIARIO":"KIA","KIASOLUTO": "KIA","KIASPORTAGE": "KIA","MAXUX":"MAXUS",
+                 "MISUBISHI": "MITSUBISHI", "MITSHUBISHI": "MITSUBISHI","CHEVROLETAVEOLS1.4 ":"CHEVROLET",
+                 "MINICOOPER": "MINI", "MINICOOOPER": "MINI", "MINICOOOPER.": "MINI",
+                 "OPELCORSA":"OPEL", "OPELCORSAS":"OPEL", "OPELCORSAS.":"OPEL",
+                 "PEUGOT": "PEUGEOT", "PEUGOT.":"PEUGEOT", "PEUGEOT.":"PEUGEOT",
+                 "PORSHE":"PORSCHE", "RANDOMRAMPLA": "RANDON", "RANDONREMOLQUE": "RANDON", "RENEGATE": "JEEP",
+                 "SANGYONG": "SSANGYONG", "SANSJONG": "SSANGYONG", "SORENTO": "KIA", "STATIONWAGON": "SIN-ANTECEDENTES",
+                 "TOYOYA":"TOYOTA", "TSR": "ZENVO", "WOKSWAGEN": "VOLKSWAGEN", "WOLSVAGEN": "VOLKSWAGEN", 
+                 "ZNADONGFENG": "DONGFENG", "CHEVY": "CHEVROLET", "FORESTER": "SUBARU",
+                 "FRONTIER": "NISSAN", "FVR": "CHEVROLET", "GOREN": "GOREN", "GRAND-CHEROKEE": "JEEP",
+                 "HIUNDAY": "HYUNDAI", "HOMAN": "SINOTRUK", "OMAN": "SINOTRUK", "KENWOOD": "KENWORTH",
+                 "KONECT": "BRILLIANCE",  "MG": "MORRIS-GARAGE", "NAVARA": "NISSAN",
+                 "OPELL": "OPEL", "OOPEL": "OPEL", "PULSAR": "BAJAJ", "RENEGADE": "JEEP", "SPRINTER": "MERCEDES-BENZ",
+                 "KGM": "SSANGYONG", "STATION-WAGON": "SIN-ANTECEDENTES", "TROOPERS": "ISUZU", "TROOPER": "ISUZU",
+                 "ZENVOTSR": "ZENVO", "ZUMI": "SIN-ANTECEDENTES", "PUGEOT": "PEUGEOT", "BENZ": "MERCEDES-BENZ",
+                 "SINOTRUKHOMAN": "SINOTRUK", "SINOTRUKOMAN": "SINOTRUK", "NISSANMP300": "NISSAN",
+                 "HYUNDAITUCSON":"HYUNDAI", "ZX": "ZX-AUTO", "ZXAUTO": "ZX-AUTO",
+                 #"PÈUGEOT": "PEUGEOT",
             }
             # Aplicar reemplazos (solo si la columna existe)
             if "Marca" in df.columns:
                 df["Marca"] = df["Marca"].replace(correcciones_marcas)
                 # Asegurar mayúsculas al final
                 df["Marca"] = df["Marca"].astype(str).str.upper()
+
+        # === 14. ELIMINAR FILAS FANTASMAS ===
+        df = df.dropna(how="all")
+        df = df[~((df["Patente"].isna()) & (df["Marca"].isna()))]
+
+        # === 15. CONVERTIR NUMÉRICOS DE 5.0 → 5 ===
+        cols_numericas = ["Tipo Vehículo", "Servicio", "Maniobra", "Consecuencia", "Pista/Vía"]
+        for col in cols_numericas:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+
+
+        # === 16. REFORZANDO LA UNIFICACIÓN FINAL DE PATENTE Y MARCA ===
+        self.__log("Aplicando unificación final en Patente y Marca...")
+
+        # Listado de valores que deben convertirse a SIN-ANTECEDENTES
+        valores_invalidos_global = [
+            "-", "SINANTECEDENTES", "SINANTECEDENTE", "SINPPU", "SINPATENTE", "SINANTEDECENTES",
+            "SINDATOS", "DESCONOCIDA", "N°0575902", "N°", "NRO", "NONE",
+            "0", 0, "", None, np.nan
+        ]
+
+        for col in ["Patente", "Marca"]:
+            if col in df.columns:
+                df[col] = df[col].astype(str).str.upper().str.strip()
+
+                # Remove punctuation and weird characters
+                df[col] = df[col].str.replace(r"[^A-Z0-9\-]", "", regex=True)
+
+                # Convert patterns like SINPATENTE, SINPU, etc → SIN-ANTECEDENTES
+                df[col] = df[col].replace(valores_invalidos_global, "SIN-ANTECEDENTES")
+
+                # Cualquier valor con longitud menor a 2 → lo consideramos inválido y lo pasamos a SIN-ANTECEDENTES
+                df.loc[df[col].str.len() < 2, col] = "SIN-ANTECEDENTES"
+
+                # Si la marca contiene números → probablemente es error → SIN-ANTECEDENTES
+                df.loc[df["Marca"].str.contains(r"\d", regex=True), "Marca"] = "SIN-ANTECEDENTES"
+
+        # === 17. Correcciones de marcas muy largas como CHEVROLETAVEOLS1.4 -> CHEVROLET ===
+        df["Marca"] = df["Marca"].str.replace(r"^(CHEVROLET).*", "CHEVROLET", regex=True)
+        df["Marca"] = df["Marca"].str.replace(r"^(MERCEDESBENZ).*", "MERCEDES-BENZ", regex=True)
+        df["Marca"] = df["Marca"].str.replace(r"^(HYUNDAI).*", "HYUNDAI", regex=True)
+        df["Marca"] = df["Marca"].str.replace(r"^(SUZUKI).*", "SUZUKI", regex=True)
+
 
         return df
