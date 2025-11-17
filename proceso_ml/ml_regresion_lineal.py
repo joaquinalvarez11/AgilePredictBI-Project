@@ -20,7 +20,7 @@ class MLRegressionLineal():
     def __log(self, msg):
         """Imprime un mensaje con marca de tiempo específico para esta clase."""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        print(f"[{now}] [Regresion Lineal] {msg}")
+        print(f"[{now}] [ML Regresion Lineal] {msg}")
 
     # Método para la predicción
     def realizar_prediccion(self):
@@ -33,13 +33,13 @@ class MLRegressionLineal():
         self.__visualizar_resultados()
 
     # Método para la exportación
-    def exportar_csv_resultado(self, nombre_base="resultado_prediccion.csv"):
+    def exportar_csv_resultado(self, nombre_base="resultado_prediccion"):
         """
         Exporta el DataFrame con las predicciones a la carpeta 'Predicciones'
         usando la ruta definida en config_manager.
         """
         if self.df_modelo is None or self.df_modelo.empty:
-            self.__log("No hay datos para exportar. Ejecuta primero el análisis predictivo.")
+            self.__log("No hay datos para exportar.")
             return
         
         ruta_predicciones = obtener_ruta("ruta_predicciones")
@@ -100,14 +100,13 @@ class MLRegressionLineal():
                         df = pd.read_csv(ruta, **read_kwargs)
                         df.columns = df.columns.str.strip()
                         
-                        if "Siniestralidad" in ruta_base:
-                            self.__log(f"Primeras columnas en '{archivo}': {df.columns[:3].tolist()}")
-                            if "ID Accidente" not in df.columns:
-                                self.__log(f"Omitido: '{archivo}' (sin columna 'ID Accidente')")
-                                continue
+                        if "Siniestralidad" in ruta_base and "ID Accidente" not in df.columns:
+                            self.__log(f"Omitido: '{archivo}' (sin columna 'ID Accidente')")
+                            continue
+
                         dfs.append(df)
                     except Exception as e:
-                        self.__log(f"Error al leer {archivo}: {type(e).__name__} - {e}")
+                        self.__log(f"Error al leer {archivo}: {e}")
         
         if not dfs:
             self.__log(f"No se encontraron archivos válidos en {ruta_base}")
@@ -130,42 +129,42 @@ class MLRegressionLineal():
         self.df_siniestro = df_siniestro.merge(conteo_vehiculos, on="ID Accidente", how="left")
         self.df_siniestro["Cantidad Vehículos"] = self.df_siniestro["Cantidad Vehículos"].fillna(0).astype(int)
 
-        self.__log(f"Columnas en df_siniestro: {self.df_siniestro.columns.tolist()}")
-        self.__log(f"Columnas en df_vehiculos: {self.df_vehiculos.columns.tolist()}")
-
     # Método para la preparación del dataset
     def __preparar_dataset(self):
-        df = self.df_siniestro.copy()
-
-        # Derivar fecha y plaza
-        df["Fecha"] = pd.to_datetime(df["Fecha"], errors="coerce")
-        df["Dia"] = df["Fecha"].dt.day
-        df["Mes"] = df["Fecha"].dt.month
-        df["Anio"] = df["Fecha"].dt.year
-
-        # Calcular cantidad total de afectados
-        columnas_afectados = [c for c in df.columns if "Consecuencias" in c or "Cantidad Afectados" in c]
-        df["Cantidad Afectados"] = df[columnas_afectados].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1)
-
-        # Agregar tráfico por fecha y plaza
+        df_siniestro = self.df_siniestro.copy()
         df_trafico = self.df_trafico.copy()
+
+        df_siniestro["Fecha"] = pd.to_datetime(df_siniestro["Fecha"], errors="coerce")
+        df_siniestro = df_siniestro[df_siniestro["Fecha"].notna()]
+        df_siniestro["Fecha_dia"] = df_siniestro["Fecha"].dt.date
+
+        columnas_afectados = [c for c in df_siniestro.columns if "Consecuencias" in c or "Cantidad Afectados" in c]
+        df_siniestro["Cantidad Afectados"] = df_siniestro[columnas_afectados].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1)
+
+        df_siniestro_agg = df_siniestro.groupby("Fecha_dia").agg({
+            "ID Accidente": "count",
+            "Cantidad Afectados": "sum",
+            "Cantidad Vehículos": "sum"
+        }).reset_index().rename(columns={"ID Accidente": "Cantidad Accidentes"})
+
         df_trafico["Fecha"] = pd.to_datetime(df_trafico["Fecha"], errors="coerce")
-        df_trafico_agg = df_trafico.groupby(["Fecha", "Plaza"])["Contar"].sum().reset_index()
+        df_trafico = df_trafico[df_trafico["Fecha"].notna()]
+        df_trafico["Fecha_dia"] = df_trafico["Fecha"].dt.date
+        df_trafico["Contar"] = pd.to_numeric(df_trafico["Contar"], errors="coerce").fillna(0)
+        df_trafico_agg = df_trafico.groupby("Fecha_dia")["Contar"].sum().reset_index()
 
-        df = df.merge(df_trafico_agg, on="Fecha", how="left")
+        df_modelo = df_trafico_agg.merge(df_siniestro_agg, on="Fecha_dia", how="left").fillna(0)
+        df_modelo["Fecha"] = pd.to_datetime(df_modelo["Fecha_dia"])
+        df_modelo["DiaSemana"] = df_modelo["Fecha"].dt.dayofweek
+        df_modelo["Mes"] = df_modelo["Fecha"].dt.month
 
-        # Filtrar y preparar variables
-        df = df[df["Cantidad Afectados"] > 0]
-        df = df[df["Contar"].notna()]
-        df["Contar"] = pd.to_numeric(df["Contar"], errors="coerce").fillna(0)
-        df["Cantidad Afectados"] = df["Cantidad Afectados"].astype(int)
-
-        self.df_modelo = df[["Contar", "Cantidad Vehículos", "Cantidad Afectados"]].dropna()
+        self.__log(f"Registros diarios para modelar: {len(df_modelo)}")
+        self.df_modelo = df_modelo
     
     # Método para el entrenamiento del modelo (Regresión lineal)
     def __entrenar_modelo(self):
-        X = self.df_modelo[["Contar", "Cantidad Vehículos"]]
-        y = self.df_modelo["Cantidad Afectados"]
+        X = self.df_modelo[["Contar", "Cantidad Vehículos", "DiaSemana", "Mes"]]
+        y = self.df_modelo["Cantidad Accidentes"]
 
         self.modelo = LinearRegression()
         self.modelo.fit(X, y)
@@ -174,11 +173,15 @@ class MLRegressionLineal():
     
     # Método para la generación del gráfico
     def __visualizar_resultados(self):
-        X = self.df_modelo["Contar"]
-        y = self.df_modelo["Cantidad Afectados"]
-        y_pred = self.df_modelo["Predicción"]
+        # Ordenar por tráfico
+        df_plot = self.df_modelo.sort_values("Contar")
+
+        X = df_plot["Contar"]
+        y = df_plot["Cantidad Accidentes"]
+        y_pred = df_plot["Predicción"]
 
         # Calcular métricas
+
         # RMSE: Mide la diferencia promedio al cuadrado entre los valores reales
         # y los predichos.
         # 
@@ -209,19 +212,24 @@ class MLRegressionLineal():
         r2 = r2_score(y, y_pred)
 
         # Crear gráfico
-        fig, ax = plt.subplots(figsize=(8, 5))
-        ax.scatter(X, y, color='blue', label='Datos Observados')
-        ax.plot(X, y_pred, color='red', label='Regresión Lineal')
+        fig, ax = plt.subplots(figsize=(9, 5))
+        ax.scatter(X, y, color='blue', alpha=0.3, s=10, label='Accidentes Observados')
+        ax.plot(X, y_pred, color='red', linewidth=2, label='Regresión Lineal')
 
         # Métricas textuales
         metricas_txt = f"RMSE: {rmse:.2f}\nMAE: {mae:.2f}\nR²: {r2:.2f}"
-        ax.text(0.05, 0.95, metricas_txt, transform=ax.transAxes, fontsize=10, verticalalignment='top', bbox=dict(facecolor='white', alpha=0.8))
+        ax.text(0.02, 0.98, metricas_txt, transform=ax.transAxes, fontsize=10, verticalalignment='top', bbox=dict(facecolor='white', alpha=0.8))
         
-        ax.set_title("Regresión Lineal: Tráfico vs Siniestralidad")
-        ax.set_xlabel("Tráfico Mensual (Contar)")
-        ax.set_ylabel("Cantidad Afectados")
+        ax.set_title("Predicción de Accidentes según Tráfico y Siniestralidad", fontsize=12)
+        ax.set_xlabel("Tráfico Total Diario (Contar)")
+        ax.set_ylabel("Cantidad de Accidentes")
         ax.legend()
         ax.grid(True)
         fig.tight_layout()
 
         self.fig = fig
+        plt.close(self.fig) # Cerrar el gráfico de la memoria
+
+        # Si el modelo no cumple el umbral
+        if r2 < 0.75:
+            self.__log("Advertencia: no cumple el umbral mínimo de precisión.")
