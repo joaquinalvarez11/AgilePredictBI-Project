@@ -97,11 +97,11 @@ class VistaMenuPrincipal(tk.Frame):
 
     # --- Funciones de Eventos ---
     def on_etl_enter(self, event):
-        self.lbl_etl_desc.config(text="Procesa archivos Excel brutos (Tráfico, Siniestros, Vehículos) y los guarda como CSV limpios.")
+        self.lbl_etl_desc.config(text="Ejecuta el ciclo completo de ingesta: limpieza de archivos Excel y carga automática a la Base de Datos central.")
     def on_etl_leave(self, event):
         self.lbl_etl_desc.config(text=self.ESPACIO_RESERVADO) 
     def on_ml_enter(self, event):
-        self.lbl_ml_desc.config(text="Ejecuta un modelo predictivo para encontrar correlaciones y tendencias en los datos.")
+        self.lbl_ml_desc.config(text="Genera proyecciones inteligentes detectando patrones ocultos en los datos históricos de siniestralidad.")
     def on_ml_leave(self, event):
         self.lbl_ml_desc.config(text=self.ESPACIO_RESERVADO) 
     def on_export_enter(self, event):

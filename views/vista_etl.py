@@ -1,7 +1,16 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
-from proceso_etl import deteccion_auto
 import threading
+import re
+import sys
+import os
+
+from proceso_etl import deteccion_auto
+current_dir = os.path.dirname(__file__)
+project_root = os.path.abspath(os.path.join(current_dir, '..'))
+proceso_db_path = os.path.join(project_root, 'proceso_db')
+sys.path.append(proceso_db_path)
+import cargar_bd
 
 class VistaETL(tk.Frame):
     def __init__(self, parent, controller):
@@ -16,12 +25,13 @@ class VistaETL(tk.Frame):
         self.grid_rowconfigure(5, weight=0) # Fila botones inferiores
 
         # --- Título, Info, Barra Progreso, Área Texto, Botones ---
-        lbl_title = ttk.Label(self, text="Proceso de Transformación ETL Masivo", font=("Arial", 18, "bold"))
+        lbl_title = ttk.Label(self, text="Sincronización de Datos Masiva", font=("Arial", 18, "bold"))
         lbl_title.grid(row=0, column=0, pady=(40, 10))
         info_text = (
-            "Este proceso buscará y transformará TODOS los archivos Excel pendientes en:\n"
-            "Tráfico Mensual, Siniestralidad/Ficha 0 y Siniestralidad/Ficha 1.\n"
-            "Haga clic en Iniciar (Puede tardar)."
+            "Este asistente automatizado ejecutará dos procesos críticos en secuencia:\n\n"
+            "1. Procesamiento de Archivos: Detecta y estandariza nuevos registros Excel (Tráfico y Siniestros).\n"
+            "2. Actualización de Base de Datos: Carga, valida y consolida la información en el repositorio central.\n\n"
+            "El sistema está listo. Haga clic en 'Iniciar' para sincronizar."
         )
         lbl_info = ttk.Label(self, text=info_text, justify="center")
         lbl_info.grid(row=1, column=0, pady=10, padx=40)
@@ -36,7 +46,7 @@ class VistaETL(tk.Frame):
         button_frame = ttk.Frame(self)
         button_frame.grid(row=5, column=0, pady=(10, 20)) # Usar fila 5
         # Botón Iniciar
-        self.btn_ejecutar = ttk.Button(button_frame, text="Iniciar Proceso ETL", command=self.iniciar_proceso_en_thread)
+        self.btn_ejecutar = ttk.Button(button_frame, text="Iniciar Sincronización", command=self.iniciar_proceso_en_thread)
         self.btn_ejecutar.pack(side=tk.LEFT, padx=10, ipady=5, ipadx=10)
         # Botón Cancelar
         self.btn_cancelar = ttk.Button(button_frame, text="Cancelar Proceso", command=self.cancelar_proceso, state='disabled')
@@ -45,34 +55,46 @@ class VistaETL(tk.Frame):
         btn_back = ttk.Button(button_frame, text="Volver al Menú", command=lambda: controller.show_menu_principal())
         btn_back.pack(side=tk.LEFT, padx=10, ipady=5, ipadx=10)
 
-    def progreso_callback(self, mensaje, progreso_actual=None, progreso_total=None):
-        """Callback llamado desde la lógica ETL."""
+    def progreso_callback(self, mensaje, progreso_actual=None, progreso_total=None, etapa=1):
+        """Callback llamado desde la lógica ETL.
+            etapa=1: ETL Excel->CSV (0-50%)
+            etapa=2: ETL CSV->DB (50-100%)
+        """
         # Actualizar GUI de forma segura
-        self.after(0, self._actualizar_gui_callback, mensaje, progreso_actual, progreso_total)
+        self.after(0, self._actualizar_gui_callback, mensaje, progreso_actual, progreso_total, etapa)
 
-    def _actualizar_gui_callback(self, mensaje, progreso_actual, progreso_total):
+    def _actualizar_gui_callback(self, mensaje, progreso_actual, progreso_total, etapa):
         """Actualiza el texto y el label de progreso (corre en hilo principal)."""
-        # --- Mostrar TODOS los mensajes en tiempo real ---
-        self.txt_status.config(state='normal')
-        if self.txt_status.index('end-1c') == '1.0': # Si el Text está vacío
-             mensaje_a_insertar = mensaje.lstrip('\n')
-        else:
-             mensaje_a_insertar = mensaje
-        self.txt_status.insert(tk.END, mensaje_a_insertar + "\n")
-        self.txt_status.see(tk.END) # Auto-scroll
-        self.txt_status.config(state='disabled')
+        # 1. Actualizar Texto (Logs)
+        if mensaje and mensaje.strip(): # Solo si hay mensaje
+            self.txt_status.config(state='normal')
+            if self.txt_status.index('end-1c') == '1.0':
+                 mensaje_a_insertar = mensaje.lstrip('\n')
+            else:
+                 mensaje_a_insertar = mensaje
+            self.txt_status.insert(tk.END, mensaje_a_insertar + "\n")
+            self.txt_status.see(tk.END)
+            self.txt_status.config(state='disabled')
 
-        # --- Actualizar LABEL de progreso ---
-        if progreso_actual is not None and progreso_total is not None and progreso_total > 0:
-            porcentaje = (progreso_actual / progreso_total) * 100
-            progreso_texto = f"Progreso: {progreso_actual} / {progreso_total} ({porcentaje:.1f}%)"
-            self.lbl_progreso.config(text=progreso_texto)
-        elif progreso_total is not None and progreso_actual is not None and progreso_actual >= progreso_total: # Completado
-             porcentaje = 100.0
-             progreso_texto = f"Progreso: {progreso_actual} / {progreso_total} ({porcentaje:.1f}%)"
-             self.lbl_progreso.config(text=progreso_texto)
+        # 2. Actualizar Barra de Progreso
+        # Solo recalculamos si recibimos números válidos.
+        # Si recibimos None (solo log de texto), mantenemos el porcentaje anterior
         
-        self.update_idletasks() # Forzar actualización visual
+        if progreso_actual is not None and progreso_total is not None and progreso_total > 0:
+            porcentaje_visual = 0.0
+            ratio = progreso_actual / progreso_total
+            
+            if etapa == 1: # 0% a 50%
+                porcentaje_visual = ratio * 50.0
+            
+            elif etapa == 2: # 50% a 100%
+                porcentaje_visual = 50.0 + (ratio * 50.0)
+
+            # Actualizar el label solo si tenemos un nuevo cálculo válido
+            self.lbl_progreso.config(text=f"Progreso Global: {porcentaje_visual:.1f}%")
+        
+        # Forzar actualización de la interfaz gráfica para que se vea el cambio
+        self.update_idletasks()
 
     def iniciar_proceso_en_thread(self):
         """Inicia el ETL en un hilo separado."""
@@ -94,17 +116,55 @@ class VistaETL(tk.Frame):
             self.cancel_event.set()
             self.btn_cancelar.config(state='disabled')
 
-    def ejecutar_proceso_completo(self, callback_para_etl, cancel_event_recibido):
+    def ejecutar_proceso_completo(self, callback_original, cancel_event_recibido):
         """Lógica del ETL que se ejecuta en el thread."""
         mensaje_resumen_final = "Proceso terminado inesperadamente."
         proceso_cancelado = False
         try:
-            mensaje_resumen_final, _, proceso_cancelado = deteccion_auto.ejecutar_proceso_etl_completo(
-                callback_progreso=callback_para_etl,
+            # --- PROCESO 1: Excel a CSV (0% - 50%) ---
+            callback_para_etl_1 = lambda msg, curr=None, tot=None: callback_original(msg, curr, tot, etapa=1)
+            
+            callback_original("\n" + "="*30 + " INICIANDO ETL 1 ...", etapa=1)
+            
+            resumen_etl1, _, proceso_cancelado = deteccion_auto.ejecutar_proceso_etl_completo(
+                callback_progreso=callback_para_etl_1, # Usamos el wrapper
                 cancel_event=cancel_event_recibido
             )
+            
+            if proceso_cancelado:
+                self.after(0, self.finalizar_proceso, "Proceso cancelado durante ETL 1.", True)
+                return
+
+            # Verificar si ETL 1 tuvo errores
+            if "Errores: 0" not in resumen_etl1:
+                callback_para_etl_1("\nADVERTENCIA: Se detectaron errores en la transformación de Excel a CSV.")
+                callback_para_etl_1("Revisar los logs anteriores antes de confiar en la carga a la BD.")
+                # Decidimos continuar de todas formas, pero con advertencia.
+                # Podrías poner 'return' aquí si quisieras detenerte.
+
+            # --- PROCESO 2: CSV a Base de Datos (50% - 100%) ---
+            # Aquí cargar_bd no reporta números, así que 'curr' y 'tot' serán None.
+            # La barra se quedará en 50% y saltará a 100% al final.
+            callback_para_etl_2 = lambda msg, curr=None, tot=None: callback_original(msg, curr, tot, etapa=2)
+
+            callback_original("\n" + "="*30 + " INICIANDO ETL 2 ...", etapa=2)
+            
+            resumen_etl2 = cargar_bd.ejecutar_carga_db_completa(
+                callback_progreso=callback_para_etl_2, # Usamos el wrapper
+                cancel_event=cancel_event_recibido
+            )
+
+            if cancel_event_recibido.is_set():
+                self.after(0, self.finalizar_proceso, "Proceso cancelado durante ETL 2.", True)
+                return
+
+            mensaje_resumen_final = f"ETL 1 (Excel->CSV): {resumen_etl1}\nETL 2 (CSV->DB): {resumen_etl2}"
+            
+            # --- Finalizar ---
             self.after(0, self.finalizar_proceso, mensaje_resumen_final, proceso_cancelado)
+            
         except Exception as e:
+            # Captura errores de cualquiera de los dos procesos
             error_msg = f"Error no capturado en ejecución:\n{type(e).__name__}: {e}"
             self.after(0, self.finalizar_proceso_con_error, error_msg)
 
