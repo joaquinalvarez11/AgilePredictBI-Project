@@ -173,10 +173,7 @@ class MLRegressionLineal():
     
     # Método para la generación del gráfico
     def __visualizar_resultados(self):
-        # Ordenar por tráfico
-        df_plot = self.df_modelo.sort_values("Contar")
-
-        X = df_plot["Contar"]
+        df_plot = self.df_modelo.sort_values("Contar") # Ordenar por tráfico
         y = df_plot["Cantidad Accidentes"]
         y_pred = df_plot["Predicción"]
 
@@ -211,25 +208,67 @@ class MLRegressionLineal():
         mae = mean_absolute_error(y, y_pred)
         r2 = r2_score(y, y_pred)
 
-        # Crear gráfico
-        fig, ax = plt.subplots(figsize=(9, 5))
-        ax.scatter(X, y, color='blue', alpha=0.3, s=10, label='Accidentes Observados')
-        ax.plot(X, y_pred, color='red', linewidth=2, label='Regresión Lineal')
-
-        # Métricas textuales
-        metricas_txt = f"RMSE: {rmse:.2f}\nMAE: {mae:.2f}\nR²: {r2:.2f}"
-        ax.text(0.02, 0.98, metricas_txt, transform=ax.transAxes, fontsize=10, verticalalignment='top', bbox=dict(facecolor='white', alpha=0.8))
-        
-        ax.set_title("Predicción de Accidentes según Tráfico y Siniestralidad", fontsize=12)
-        ax.set_xlabel("Tráfico Total Diario (Contar)")
-        ax.set_ylabel("Cantidad de Accidentes")
-        ax.legend()
-        ax.grid(True)
-        fig.tight_layout()
-
-        self.fig = fig
-        plt.close(self.fig) # Cerrar el gráfico de la memoria
-
         # Si el modelo no cumple el umbral
         if r2 < 0.75:
             self.__log("Advertencia: no cumple el umbral mínimo de precisión.")
+
+        # Agrupar histórica por tráfico
+        max_contar = int(self.df_modelo["Contar"].max())
+        bin_size = 50000 if max_contar > 100000 else 10000
+        bins = range(0, max_contar + bin_size, bin_size)
+
+        df_modelo = self.df_modelo.copy()
+        df_modelo["Contar_bin"] = pd.cut(df_modelo["Contar"], bins=bins)
+        df_agg = df_modelo.groupby("Contar_bin", observed=False).agg({
+            "Contar": "mean",
+            "Cantidad Accidentes": "mean"
+        }).reset_index()
+
+        # Predicción futura
+        ultima_fecha = self.df_modelo["Fecha"].max()
+        anio = ultima_fecha.year + (1 if ultima_fecha.month == 12 else 0)
+        mes = 1 if ultima_fecha.month == 12 else ultima_fecha.month + 1
+        fecha_inicio = pd.Timestamp(year=anio, month=mes, day=1)
+        fecha_fin = fecha_inicio + pd.offsets.MonthEnd(1)
+
+        fechas_futuras = pd.date_range(start=fecha_inicio, end=fecha_fin, freq="D")
+        promedio_trafico = self.df_modelo["Contar"].mean()
+        promedio_vehiculos = self.df_modelo["Cantidad Vehículos"].mean()
+
+        df_futuro = pd.DataFrame({
+            "Fecha": fechas_futuras,
+            "Contar": promedio_trafico,
+            "Cantidad Vehículos": promedio_vehiculos,
+            "DiaSemana": fechas_futuras.dayofweek,
+            "Mes": fechas_futuras.month
+        })
+
+        X_futuro = df_futuro[["Contar", "Cantidad Vehículos", "DiaSemana", "Mes"]]
+        df_futuro["Predicción Accidentes"] = self.modelo.predict(X_futuro)
+
+        # Crear gráfico
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+        
+        # Histórico agrupado
+        ax1.plot(df_agg["Contar"], df_agg["Cantidad Accidentes"], color='blue', marker='o', label='Histórico agrupado')
+        ax1.set_title("Histórico agrupado")
+        ax1.set_xlabel("Tráfico promedio por rango")
+        ax1.set_ylabel("Accidentes promedio")
+        ax1.grid(True)
+
+        # Predicción futura
+        ax2.plot(df_futuro["Fecha"], df_futuro["Predicción Accidentes"], color='red', marker='x', label=f'Predicción {fecha_inicio.strftime("%B %Y")}')
+        ax2.set_title(f"Predicción futura ({fecha_inicio.strftime('%B %Y')})")
+        ax2.set_xlabel("Fecha")
+        ax2.set_ylabel("Accidentes estimados")
+        ax2.grid(True)
+
+        # Métricas del modelo
+        metricas_txt = f"RMSE: {rmse:.2f}\nMAE: {mae:.2f}\nR²: {r2:.2f}"
+        ax1.text(0.02, 0.98, metricas_txt, transform=ax1.transAxes, fontsize=10, verticalalignment='top', bbox=dict(facecolor='white', alpha=0.8))
+
+        fig.suptitle("Accidentes históricos y predicción futura (según Tráfico y Siniestralidad)", fontsize=14)
+        fig.tight_layout(rect=[0, 0, 1, 0.95])
+
+        self.fig = fig
+        plt.close(self.fig) # Cerrar el gráfico de la memoria

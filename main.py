@@ -54,11 +54,9 @@ class AgilePredictApp(tk.Tk):
 
     def show_ml_view(self):
         self.show_frame(VistaML)
-        print("Navegando a la vista de Análisis Predictivo...")
 
     def show_export_view(self):
         self.show_frame(VistaExportar)
-        print("Navegando a la vista de Exportación...")
 
 if __name__ == "__main__":
     app = AgilePredictApp()
