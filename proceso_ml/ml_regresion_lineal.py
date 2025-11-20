@@ -1,6 +1,8 @@
 import os # TODO: usar funciones de gestion_archivos.py
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use("Agg") # Usar sólo backend (sin usar TKinter directamente)
 import matplotlib.pyplot as plt
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import root_mean_squared_error, mean_absolute_error, r2_score
@@ -20,40 +22,30 @@ class MLRegressionLineal():
     def __log(self, msg):
         """Imprime un mensaje con marca de tiempo específico para esta clase."""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        print(f"[{now}] [ML Regresion Lineal] {msg}")
+        log_msg = f"[{now}] [ML Regresion Lineal] {msg}"
+        print(log_msg)
+        if self.callback: self.callback(log_msg, None)
 
     # Método para la predicción
-    def realizar_prediccion(self):
+    def realizar_prediccion(self, callback=None):
         """Punto de entrada para la predicción"""
+        self.callback = callback
+
         self.__log("Iniciando predicción...")
+        if callback: callback("Cargando datos ...", 10)
         self.__cargar_datos()
+
+        if callback: callback("Entrenando modelo ...", 40)
         self.__unir_fuentes()
+
+        if callback: callback("Generando predicción ...", 70)
         self.__preparar_dataset()
+
+        if callback: callback("Visualizando resultados ...", 90)
         self.__entrenar_modelo()
+
+        if callback: callback("Análisis completado.", 100)
         self.__visualizar_resultados()
-
-    # Método para la exportación
-    def exportar_csv_resultado(self, nombre_base="resultado_prediccion"):
-        """
-        Exporta el DataFrame con las predicciones a la carpeta 'Predicciones'
-        usando la ruta definida en config_manager.
-        """
-        if self.df_modelo is None or self.df_modelo.empty:
-            self.__log("No hay datos para exportar.")
-            return
-        
-        ruta_predicciones = obtener_ruta("ruta_predicciones")
-        os.makedirs(ruta_predicciones, exist_ok=True)
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        nombre_archivo = f"{nombre_base}_{timestamp}.csv"
-        ruta_salida = os.path.join(ruta_predicciones, nombre_archivo)
-
-        try:
-            self.df_modelo.to_csv(ruta_salida, index=False, encoding="utf-8-sig")
-            self.__log(f"Archivo exportado exitosamente a: {ruta_salida}")
-        except Exception as e:
-            self.__log(f"Error al exportar el archivo: {e}")
     
     # Métodos privados
     # Método para la carga de todos los CSV
@@ -246,6 +238,17 @@ class MLRegressionLineal():
         X_futuro = df_futuro[["Contar", "Cantidad Vehículos", "DiaSemana", "Mes"]]
         df_futuro["Predicción Accidentes"] = self.modelo.predict(X_futuro)
 
+        # Ruta de exportación
+        ruta_predicciones = obtener_ruta("ruta_predicciones")
+        os.makedirs(ruta_predicciones, exist_ok=True)
+        
+        # Guardar CSV
+        nombre_csv = f"predicciones_futuras_{fecha_inicio.strftime('%Y%m')}.csv"
+        ruta_csv = os.path.join(ruta_predicciones, nombre_csv)
+        columnas_exportar = ["Fecha", "Contar", "Cantidad Vehículos", "DiaSemana", "Mes", "Predicción Accidentes"]
+        df_futuro.to_csv(ruta_csv, index=False, columns=columnas_exportar)
+        self.__log(f"CSV de predicción futura guardado en: {ruta_csv}")
+
         # Crear gráfico
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
         
@@ -270,5 +273,12 @@ class MLRegressionLineal():
         fig.suptitle("Accidentes históricos y predicción futura (según Tráfico y Siniestralidad)", fontsize=14)
         fig.tight_layout(rect=[0, 0, 1, 0.95])
 
+        # Guardar gráfico
         self.fig = fig
+
+        nombre_grafico = f"grafico_combinado_{fecha_inicio.strftime('%Y%m')}.png"
+        ruta_grafico = os.path.join(ruta_predicciones, nombre_grafico)
+        fig.savefig(ruta_grafico)
+
+        self.__log(f"Gráfico guardado en: {ruta_grafico}")
         plt.close(self.fig) # Cerrar el gráfico de la memoria
