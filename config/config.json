@@ -1,5 +1,6 @@
 {
-  "ruta_excel_bruto": "(ruta)/SCRDA Excel/Excel Brutos/",
-  "ruta_csv_limpio": "(ruta)/SCRDA Excel/Excel Limpios/",
-  "ruta_predicciones": "(ruta)/SCRDA Excel/Predicciones/"
+  "ruta_excel_bruto": "C:/Users/hriar/Documents/SCRDA Excel/Excel Brutos/",
+  "ruta_csv_limpio": "C:/Users/hriar/Documents/SCRDA Excel/Excel Limpios/",
+  "ruta_predicciones": "C:/Users/hriar/Documents/SCRDA Excel/Predicciones/",
+  "ruta_database": "database/ruta_algarrobo.db"
 }
