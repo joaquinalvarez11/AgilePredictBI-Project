@@ -44,7 +44,7 @@ class VistaBienvenida(ttk.Frame):
         # Cargar y posicionar logo Predict
         try:
             right_img_path = os.path.join(assets_dir, "agilepredictbi_Logo.png")
-            right_img = Image.open(right_img_path).resize((160, 100), Image.LANCZOS) # Mismo tamaño para ambos
+            right_img = Image.open(right_img_path).resize((200, 100), Image.LANCZOS) # Mismo tamaño para ambos
             self.predict_logo = ImageTk.PhotoImage(right_img)
             ttk.Label(logos_frame, image=self.predict_logo).grid(row=0, column=3, padx=10, pady=10) # Columna 3
         except FileNotFoundError:
