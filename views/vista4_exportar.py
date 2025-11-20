@@ -17,14 +17,26 @@ class VistaExportar(ttk.Frame):
         super().__init__(parent)
         self.controller = controller
         
+        # --- Estilos ---
+        style = ttk.Style()
+        style.configure("White.TFrame", background="white")
+        
+        # Aplicamos el estilo (En lugar de bg="white")
+        self.configure(style="White.TFrame") 
+
+        # Estilos adicionales
+        style.configure("Export.TLabelframe", background="white")
+        style.configure("Export.TLabelframe.Label", background="white", foreground="#004c8c", font=("Helvetica", 11, "bold"))
+        style.configure("Export.TLabel", background="white", font=("Helvetica", 10))
+        style.configure("Status.TLabel", background="#f8f9fa", font=("Consolas", 9))
+
         # --- Variables de Estado ---
         self.monitor_activo = False
         self.observer = None
         
-        # Configuración por defecto
         path_escritorio = os.path.join(USER_HOME, "Desktop")
         self.ruta_destino = tk.StringVar(value=path_escritorio)
-        self.tipo_reporte = tk.StringVar(value="Tráfico") # Valor por defecto del Combo
+        self.tipo_reporte = tk.StringVar(value="Tráfico") 
         self.paginas_seleccion = tk.StringVar(value="1-3")
         self.estado_texto = tk.StringVar(value="Sistema en espera. Configure y active el monitor.")
 
@@ -32,60 +44,62 @@ class VistaExportar(ttk.Frame):
         self.columnconfigure(0, weight=1)
         self.columnconfigure(1, weight=1)
         
-        # Título
-        lbl_titulo = ttk.Label(self, text="Gestor de Exportación Power BI", font=("Arial", 18, "bold"))
-        lbl_titulo.grid(row=0, column=0, columnspan=2, pady=(20, 30))
+        # Header Azul
+        header_frame = tk.Frame(self, bg="#f0f4f8", height=60)
+        header_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 20))
+        tk.Label(header_frame, text="Gestor de Exportación Power BI", font=("Helvetica", 16, "bold"), bg="#f0f4f8", fg="#004c8c").pack(pady=15)
 
         # --- Panel de Configuración (Izquierda) ---
-        frame_config = ttk.LabelFrame(self, text="Parámetros de Exportación", padding=20)
+        frame_config = ttk.LabelFrame(self, text="Parámetros de Exportación", padding=20, style="Export.TLabelframe")
         frame_config.grid(row=1, column=0, sticky="nsew", padx=20, pady=10)
 
         # 1. Carpeta Destino
-        ttk.Label(frame_config, text="Guardar en:").pack(anchor="w", pady=5)
-        frame_ruta = ttk.Frame(frame_config)
+        ttk.Label(frame_config, text="Directorio de salida:", style="Export.TLabel").pack(anchor="w", pady=5)
+        frame_ruta = ttk.Frame(frame_config, style="Export.TLabelframe") # Hereda bg blanco
         frame_ruta.pack(fill="x", pady=5)
-        ttk.Entry(frame_ruta, textvariable=self.ruta_destino, state="readonly").pack(side="left", fill="x", expand=True)
+        
+        entry_ruta = ttk.Entry(frame_ruta, textvariable=self.ruta_destino, state="readonly")
+        entry_ruta.pack(side="left", fill="x", expand=True)
         ttk.Button(frame_ruta, text="📂", width=3, command=self.seleccionar_carpeta).pack(side="right", padx=5)
 
-        # 2. Selector de Tipo de Reporte (Combobox)
-        ttk.Label(frame_config, text="Tipo de Informe:").pack(anchor="w", pady=(15, 5))
+        # 2. Selector de Tipo
+        ttk.Label(frame_config, text="Categoría del Informe:", style="Export.TLabel").pack(anchor="w", pady=(20, 5))
         opciones_reporte = ["Tráfico", "Siniestro", "Predicción", "Ejecutivo_General"]
-        combo_tipo = ttk.Combobox(frame_config, textvariable=self.tipo_reporte, values=opciones_reporte, state="readonly", font=("Arial", 10))
+        combo_tipo = ttk.Combobox(frame_config, textvariable=self.tipo_reporte, values=opciones_reporte, state="readonly", font=("Helvetica", 10))
         combo_tipo.pack(fill="x", pady=5)
-        ttk.Label(frame_config, text="El archivo se nombrará: Tipo_Fecha.pdf", font=("Arial", 8), foreground="gray").pack(anchor="w")
+        ttk.Label(frame_config, text="Nomenclatura: Categoría_Fecha.pdf", font=("Helvetica", 8), foreground="#888888", background="white").pack(anchor="w")
 
         # 3. Páginas
-        ttk.Label(frame_config, text="Páginas a procesar (Ej: 1, 3-5):").pack(anchor="w", pady=(15, 5))
+        ttk.Label(frame_config, text="Páginas a procesar (Ej: 1, 3-5):", style="Export.TLabel").pack(anchor="w", pady=(20, 5))
         ttk.Entry(frame_config, textvariable=self.paginas_seleccion).pack(fill="x")
-        ttk.Label(frame_config, text="Deje vacío para mantener todas las páginas.", font=("Arial", 8), foreground="gray").pack(anchor="w")
+        ttk.Label(frame_config, text="Deje vacío para archivo completo.", font=("Helvetica", 8), foreground="#888888", background="white").pack(anchor="w")
 
-        # --- Panel de Control a la Derecha ---
-        frame_control = ttk.Frame(self, padding=20)
+        # --- Panel de Control (Derecha) ---
+        frame_control = ttk.Frame(self, padding=20, style="Export.TLabelframe") # Usamos el estilo para bg blanco
         frame_control.grid(row=1, column=1, sticky="nsew", padx=20, pady=10)
 
         # Botón Monitor
         self.btn_monitor = tk.Button(
             frame_control, 
             text="INICIAR MONITOR", 
-            bg="#337ab7", fg="white", font=("Arial", 11, "bold"),
+            bg="#004c8c", fg="white", font=("Helvetica", 12, "bold"),
             command=self.toggle_monitor,
-            height=2, relief="flat", cursor="hand2"
+            height=2, relief="flat", cursor="hand2",
+            activebackground="#003366", activeforeground="white"
         )
         self.btn_monitor.pack(fill="x", pady=(0, 20))
 
         # Consola de Estado
-        lbl_status = ttk.Label(frame_control, text="Bitácora de Actividad:", font=("Arial", 10, "bold"))
-        lbl_status.pack(anchor="w")
+        ttk.Label(frame_control, text="Bitácora de Actividad:", style="Export.TLabel", font=("Helvetica", 10, "bold")).pack(anchor="w")
         
         self.lbl_consola = ttk.Label(
             frame_control, 
             textvariable=self.estado_texto, 
-            background="#f8f9fa", 
+            style="Status.TLabel",
             relief="groove", 
             anchor="nw",
             padding=10,
-            wraplength=300,
-            font=("Consolas", 9)
+            wraplength=350
         )
         self.lbl_consola.pack(fill="both", expand=True)
 
@@ -115,7 +129,6 @@ class VistaExportar(ttk.Frame):
         self.event_handler = FolderHandler(self.procesar_carpeta_detectada)
         self.observer = Observer()
         
-        # IMPORTANTE: recursive=False. 
         # Solo miramos si aparece una carpeta "print-job" en la raíz. No miramos dentro todavía.
         self.observer.schedule(self.event_handler, path=CARPETA_ORIGEN_PBI, recursive=False)
         
@@ -142,7 +155,7 @@ class VistaExportar(ttk.Frame):
         """
         self.after(0, lambda: self.estado_texto.set(f"Detectada exportación en curso...\nEsperando finalización de Power BI (15s)..."))
         
-        # 1. ESPERA DE SEGURIDAD (Crucial para Power BI)
+        # 1. Espera de Seguridad para Power BI
         # Esperamos a que Power BI termine de escribir el archivo dentro de la carpeta
         time.sleep(15) 
 
