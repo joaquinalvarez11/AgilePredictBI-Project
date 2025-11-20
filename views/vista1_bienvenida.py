@@ -7,61 +7,74 @@ class VistaBienvenida(ttk.Frame):
     def __init__(self, parent, controller):
         super().__init__(parent)
         self.controller = controller 
-
-        # Configurar la cuadrícula del frame principal para que el contenido se centre y expanda
-        self.grid_rowconfigure(0, weight=1) # Fila superior para los logos
-        self.grid_rowconfigure(1, weight=2) # Fila inferior para el texto y el botón
-        self.grid_columnconfigure(0, weight=1) # Columna central para todo
-
-        # Frame para los Logos en la parte superior
-        logos_frame = ttk.Frame(self)
-        logos_frame.grid(row=0, column=0, sticky="s", pady=(50, 0)) # Sticky="s" para pegarlo a la parte inferior de su celda
         
-        # Configurar las columnas de logos_frame para que los logos se centren
-        logos_frame.grid_columnconfigure(0, weight=1) # Espaciador izquierdo
-        logos_frame.grid_columnconfigure(1, weight=0) # Logo RDA (no expandir)
-        logos_frame.grid_columnconfigure(2, weight=0) # Espacio entre logos
-        logos_frame.grid_columnconfigure(3, weight=0) # Logo Predict (no expandir)
-        logos_frame.grid_columnconfigure(4, weight=1) # Espaciador derecho
+        # --- Estilos ---
+        style = ttk.Style()
+        style.configure("White.TFrame", background="white")
+        style.configure("Title.TLabel", background="white", foreground="#004c8c", font=("Helvetica", 20, "bold"))
+        style.configure("Body.TLabel", background="white", foreground="#555555", font=("Helvetica", 11))
+        style.configure("Action.TButton", font=("Helvetica", 11, "bold"))
+
+        self.configure(style="White.TFrame")
+
+        # --- Grid Config ---
+        self.grid_rowconfigure(0, weight=1) 
+        self.grid_rowconfigure(1, weight=2) 
+        self.grid_rowconfigure(2, weight=0) # Barra decorativa inferior
+        self.grid_columnconfigure(0, weight=1) 
+
+        # --- Sección Logos ---
+        logos_frame = tk.Frame(self, bg="white")
+        logos_frame.grid(row=0, column=0, sticky="s", pady=(60, 0))
+        
+        logos_frame.grid_columnconfigure(0, weight=1)
+        logos_frame.grid_columnconfigure(1, weight=0)
+        logos_frame.grid_columnconfigure(2, weight=0)
+        logos_frame.grid_columnconfigure(3, weight=0)
+        logos_frame.grid_columnconfigure(4, weight=1)
 
         script_dir = os.path.dirname(__file__)
         assets_dir = os.path.join(script_dir, '..', 'assets')
 
-        # Cargar y posicionar logo RDA
+        # Cargar Logo RDA
         try:
             left_img_path = os.path.join(assets_dir, "RDA_Logo.png")
-            left_img = Image.open(left_img_path).resize((250, 100), Image.LANCZOS) # Ajustar tamaño para que quepan juntos
+            left_img = Image.open(left_img_path).resize((250, 100), Image.LANCZOS)
             self.rda_logo = ImageTk.PhotoImage(left_img)
-            ttk.Label(logos_frame, image=self.rda_logo).grid(row=0, column=1, padx=10, pady=10) # Columna 1
+            tk.Label(logos_frame, image=self.rda_logo, bg="white", bd=0).grid(row=0, column=1, padx=15)
         except FileNotFoundError:
-            ttk.Label(logos_frame, text="[RDA Logo Placeholder]\n(No encontrado)").grid(row=0, column=1, padx=10, pady=10)
-            print(f"RDA_Logo.png no encontrado en {left_img_path}")
+            tk.Label(logos_frame, text="[RDA Logo]", bg="white", fg="gray").grid(row=0, column=1)
 
-        # Separador pequeño entre logos (opcional, para visualización)
-        # Puedes ajustar el padx para controlar el espacio entre ellos
-        ttk.Frame(logos_frame, width=30).grid(row=0, column=2) 
+        # Línea vertical separadora sutil
+        sep = tk.Frame(logos_frame, bg="#cccccc", width=2, height=60)
+        sep.grid(row=0, column=2, padx=30)
 
-        # Cargar y posicionar logo Predict
+        # Cargar Logo Predict
         try:
             right_img_path = os.path.join(assets_dir, "agilepredictbi_Logo.png")
-            right_img = Image.open(right_img_path).resize((200, 100), Image.LANCZOS) # Mismo tamaño para ambos
+            right_img = Image.open(right_img_path).resize((200, 100), Image.LANCZOS)
             self.predict_logo = ImageTk.PhotoImage(right_img)
-            ttk.Label(logos_frame, image=self.predict_logo).grid(row=0, column=3, padx=10, pady=10) # Columna 3
+            tk.Label(logos_frame, image=self.predict_logo, bg="white", bd=0).grid(row=0, column=3, padx=15)
         except FileNotFoundError:
-            ttk.Label(logos_frame, text="[Predict Logo Placeholder]\n(No encontrado)").grid(row=0, column=3, padx=10, pady=10)
-            print(f"agilepredictbi_Logo.png no encontrado en {right_img_path}")
+            tk.Label(logos_frame, text="[Predict Logo]", bg="white", fg="gray").grid(row=0, column=3)
 
-        # Frame para el Texto y Botón en la parte inferior
-        text_button_frame = ttk.Frame(self)
-        text_button_frame.grid(row=1, column=0, sticky="n", padx=30, pady=(20, 50)) # Sticky="n" para pegarlo arriba de su celda
+        # --- Sección TExto y Acción ---
+        text_button_frame = ttk.Frame(self, style="White.TFrame")
+        text_button_frame.grid(row=1, column=0, sticky="n", padx=40, pady=(30, 50))
         
-        # Contenido centrado
-        text_button_frame.grid_columnconfigure(0, weight=1)
+        ttk.Label(text_button_frame, text="Bienvenido a AgilePredictBI", style="Title.TLabel").pack(pady=(0, 15))
+        
+        texto_desc = (
+            "Su asistente ejecutivo para la transformación de datos y análisis predictivo.\n"
+            "Gestionamos el cruce inteligente entre tráfico y siniestralidad para la toma de decisiones."
+        )
+        ttk.Label(text_button_frame, text=texto_desc, style="Body.TLabel", justify="center", wraplength=700).pack(pady=5)
 
-        ttk.Label(text_button_frame, text="Bienvenido a AgilePredictBI", font=("Arial", 18, "bold")).pack(pady=10)
-        ttk.Label(text_button_frame,
-                  text="Este asistente le ayudará a transformar sus fichas en análisis predictivo cruzando datos de tráfico y siniestralidad. Haga clic en Siguiente para comenzar.",
-                  wraplength=600, justify="center").pack(pady=10) # Línea más ancha
+        # Botón con un poco más de presencia (Padding interno)
+        btn = ttk.Button(text_button_frame, text="Comenzar Sesión", style="Action.TButton", command=self.controller.show_menu_principal)
+        btn.pack(pady=30, ipadx=20, ipady=5)
 
-        # Botón Siguiente
-        ttk.Button(text_button_frame, text="Siguiente", command=self.controller.show_menu_principal).pack(pady=20)
+        # --- Barra Inferior ---
+        # Una franja de color institucional al pie
+        footer_strip = tk.Frame(self, bg="#00a2e8", height=10)
+        footer_strip.grid(row=2, column=0, sticky="ew")

@@ -6,105 +6,66 @@ class VistaMenuPrincipal(tk.Frame):
         super().__init__(parent)
         self.controller = controller
 
-        # Fila 0: Espaciador superior (CON peso, empuja hacia abajo)
-        # Fila 1: Título
-        # Fila 2: Botones
-        # Fila 3: Descripciones
-        # Fila 4: Espaciador inferior (CON peso, empuja hacia arriba)
-        self.grid_rowconfigure((0, 4), weight=1) # Filas 0 y 4 son espaciadores
-        self.grid_rowconfigure((1, 2, 3), weight=0) # Filas de contenido no expanden
-        self.grid_columnconfigure((0, 1, 2), weight=1) # Columnas centran horizontalmente
+        # --- Estilos ---
+        self.configure(bg="white") # Fondo blanco base
 
-        # Título (Ahora en Fila 1)
-        lbl_title = ttk.Label(self, text="Menú Principal", font=("Arial", 24, "bold"))
-        # Aumentar el padding inferior (pady) para dar más espacio
-        lbl_title.grid(row=1, column=0, columnspan=3, pady=(0, 100), sticky="n") # Fila 1
+        # Estilos personalizados para este menú
+        style = ttk.Style()
+        style.configure("MenuTitle.TLabel", background="#004c8c", foreground="white", font=("Helvetica", 22, "bold"))
+        style.configure("Card.TButton", font=("Helvetica", 12, "bold"), background="white")
+        style.configure("Desc.TLabel", background="white", foreground="#666666", font=("Helvetica", 10))
 
-        # --- Constante para reservar espacio ---
+        # Grid principal
+        self.grid_rowconfigure(0, weight=0) # Header Azul
+        self.grid_rowconfigure(1, weight=1) # Espacio
+        self.grid_rowconfigure(2, weight=0) # Botones
+        self.grid_rowconfigure(3, weight=0) # Descripciones
+        self.grid_rowconfigure(4, weight=2) # Espacio inferior
+        
+        self.grid_columnconfigure((0, 1, 2), weight=1)
+
+        # --- Header Superior ---
+        # Frame azul arriba para dar identidad corporativa
+        header_frame = tk.Frame(self, bg="#004c8c", height=80)
+        header_frame.grid(row=0, column=0, columnspan=3, sticky="ew")
+        header_frame.grid_propagate(False) # Mantiene altura fija
+        
+        lbl_title = tk.Label(header_frame, text="Menú Principal", font=("Helvetica", 18, "bold"), bg="#004c8c", fg="white")
+        lbl_title.place(relx=0.5, rely=0.5, anchor="center")
+
+        # --- Contenido ---
         self.ESPACIO_RESERVADO = "\n\n"
 
-        # --- Bloque 1: Transformación ETL (en Fila 2) ---
-        btn_etl = ttk.Button(
-            self, 
-            text="Transformación ETL", 
-            command=lambda: controller.show_etl_view(),
-            width=30,
-            style="Menu.TButton"
-        )
-        btn_etl.grid(row=2, column=0, padx=20, pady=20) # Fila 2
+        # Definimos los botones (ETL, ML, Export)
+        # Uso de ipady/ipadx para que se sientan como "tarjetas"
         
-        # Etiqueta de descripción (en Fila 3)
-        self.lbl_etl_desc = ttk.Label(
-            self,
-            text=self.ESPACIO_RESERVADO,
-            font=("Arial", 10),
-            justify="center",
-            wraplength=250
-        )
-        self.lbl_etl_desc.grid(row=3, column=0, padx=20, pady=(0, 20), sticky="n") # Fila 3
+        # 1. ETL
+        btn_etl = ttk.Button(self, text="Gestión de Datos (ETL)", command=lambda: controller.show_etl_view(), style="Card.TButton", width=25)
+        btn_etl.grid(row=2, column=0, padx=20, pady=(50, 15), ipady=10)
 
-        # --- Bloque 2: Análisis Predictivo (en Fila 2) ---
-        btn_ml = ttk.Button(
-            self, 
-            text="Análisis Predictivo", 
-            command=lambda: controller.show_ml_view(),
-            width=30,
-            style="Menu.TButton"
-        )
-        btn_ml.grid(row=2, column=1, padx=20, pady=20) # Fila 2
+        self.lbl_etl_desc = ttk.Label(self, text=self.ESPACIO_RESERVADO, style="Desc.TLabel", justify="center", wraplength=250)
+        self.lbl_etl_desc.grid(row=3, column=0, padx=20, sticky="n")
 
-        # Etiqueta de descripción (en Fila 3)
-        self.lbl_ml_desc = ttk.Label(
-            self,
-            text=self.ESPACIO_RESERVADO,
-            font=("Arial", 10),
-            justify="center",
-            wraplength=250
-        )
-        self.lbl_ml_desc.grid(row=3, column=1, padx=20, pady=(0, 20), sticky="n") # Fila 3
+        # 2. ML
+        btn_ml = ttk.Button(self, text="Análisis Predictivo", command=lambda: controller.show_ml_view(), style="Card.TButton", width=25)
+        btn_ml.grid(row=2, column=1, padx=20, pady=(50, 15), ipady=10)
+
+        self.lbl_ml_desc = ttk.Label(self, text=self.ESPACIO_RESERVADO, style="Desc.TLabel", justify="center", wraplength=250)
+        self.lbl_ml_desc.grid(row=3, column=1, padx=20, sticky="n")
+
+        # 3. Export
+        btn_export = ttk.Button(self, text="Exportación de Informes", command=lambda: controller.show_export_view(), style="Card.TButton", width=25)
+        btn_export.grid(row=2, column=2, padx=20, pady=(50, 15), ipady=10)
+
+        self.lbl_export_desc = ttk.Label(self, text=self.ESPACIO_RESERVADO, style="Desc.TLabel", justify="center", wraplength=250)
+        self.lbl_export_desc.grid(row=3, column=2, padx=20, sticky="n")
+
+        # --- Eventos Hover ---
+        btn_etl.bind("<Enter>", lambda e: self.lbl_etl_desc.config(text="Ciclo completo de ingesta:\nLimpieza de Excel y Carga a BD."))
+        btn_etl.bind("<Leave>", lambda e: self.lbl_etl_desc.config(text=self.ESPACIO_RESERVADO))
         
-        # --- Bloque 3: Exportación de Informes (en Fila 2) ---
-        btn_export = ttk.Button(
-            self, 
-            text="Exportación de Informes", 
-            command=lambda: controller.show_export_view(),
-            width=30,
-            style="Menu.TButton"
-        )
-        btn_export.grid(row=2, column=2, padx=20, pady=20) # Fila 2
-
-        # Etiqueta de descripción (en Fila 3)
-        self.lbl_export_desc = ttk.Label(
-            self,
-            text=self.ESPACIO_RESERVADO,
-            font=("Arial", 10),
-            justify="center",
-            wraplength=250
-        )
-        self.lbl_export_desc.grid(row=3, column=2, padx=20, pady=(0, 20), sticky="n") # Fila 3
-
-        # --- Vinculación de eventos ---
-        btn_etl.bind("<Enter>", self.on_etl_enter)
-        btn_etl.bind("<Leave>", self.on_etl_leave)
-        btn_ml.bind("<Enter>", self.on_ml_enter)
-        btn_ml.bind("<Leave>", self.on_ml_leave)
-        btn_export.bind("<Enter>", self.on_export_enter)
-        btn_export.bind("<Leave>", self.on_export_leave)
+        btn_ml.bind("<Enter>", lambda e: self.lbl_ml_desc.config(text="Proyecciones inteligentes:\nDetección de patrones en siniestralidad."))
+        btn_ml.bind("<Leave>", lambda e: self.lbl_ml_desc.config(text=self.ESPACIO_RESERVADO))
         
-        # Estilo
-        style = ttk.Style(self)
-        style.configure("Menu.TButton", font=("Arial", 14), padding=40)
-
-    # --- Funciones de Eventos ---
-    def on_etl_enter(self, event):
-        self.lbl_etl_desc.config(text="Ejecuta el ciclo completo de ingesta: limpieza de archivos Excel y carga automática a la Base de Datos central.")
-    def on_etl_leave(self, event):
-        self.lbl_etl_desc.config(text=self.ESPACIO_RESERVADO) 
-    def on_ml_enter(self, event):
-        self.lbl_ml_desc.config(text="Genera proyecciones inteligentes detectando patrones ocultos en los datos históricos de siniestralidad.")
-    def on_ml_leave(self, event):
-        self.lbl_ml_desc.config(text=self.ESPACIO_RESERVADO) 
-    def on_export_enter(self, event):
-        self.lbl_export_desc.config(text="Captura informes PDF desde Power BI.")
-    def on_export_leave(self, event):
-        self.lbl_export_desc.config(text=self.ESPACIO_RESERVADO)
+        btn_export.bind("<Enter>", lambda e: self.lbl_export_desc.config(text="Centro de Reportes:\nCaptura automatizada desde Power BI."))
+        btn_export.bind("<Leave>", lambda e: self.lbl_export_desc.config(text=self.ESPACIO_RESERVADO))
