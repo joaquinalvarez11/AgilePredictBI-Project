@@ -5,7 +5,7 @@ from views.vista4_exportar import VistaExportar
 
 from views.vista2_menu_principal import VistaMenuPrincipal
 from views.vista_etl import VistaETL
-# from views.vista_ml import VistaML 
+from views.vista_ml import VistaML
 
 class AgilePredictApp(tk.Tk):
     def __init__(self):
@@ -29,7 +29,7 @@ class AgilePredictApp(tk.Tk):
             VistaBienvenida, 
             VistaMenuPrincipal, 
             VistaETL,
-            VistaResultados,
+            VistaML,
             VistaExportar
         ]
 
@@ -53,12 +53,10 @@ class AgilePredictApp(tk.Tk):
         self.show_frame(VistaETL)
 
     def show_ml_view(self):
-        self.show_frame(VistaResultados)
-        print("Navegando a la vista de Análisis Predictivo...")
+        self.show_frame(VistaML)
 
     def show_export_view(self):
         self.show_frame(VistaExportar)
-        print("Navegando a la vista de Exportación...")
 
 if __name__ == "__main__":
     app = AgilePredictApp()
