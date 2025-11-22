@@ -1,149 +1,199 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, scrolledtext
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-from sklearn.linear_model import LinearRegression # Importamos para una simulación más cercana a ML
+from proceso_ml.ml_regresion_lineal import MLRegressionLineal
+import traceback
+import threading
+import os
 
 class VistaResultados(ttk.Frame):
     def __init__(self, parent, controller):
         super().__init__(parent)
         self.parent = parent
-        self.fig = None
+        self.controller = controller
+        self.modelo = MLRegressionLineal()
+        self.ml_thread = None
+        self.canvas_widget = None
 
-        self.grid_rowconfigure(0, weight=0) # Título
-        self.grid_rowconfigure(1, weight=1) # Contenido principal de gráfico y predicción
-        self.grid_rowconfigure(2, weight=0) # Navegación
+        # --- Estilos ---
+        style = ttk.Style()
+        style.configure("White.TFrame", background="white")
+        self.configure(style="White.TFrame")
+        style.configure("MLInfo.TLabel", background="white", foreground="#555555", font=("Helvetica", 10))
+
+        # --- Grid Config ---
+        self.grid_rowconfigure(0, weight=0) # Header
+        self.grid_rowconfigure(1, weight=0) # Info
+        self.grid_rowconfigure(2, weight=1) # Resultados
+        self.grid_rowconfigure(3, weight=0) # Botones
+        self.grid_rowconfigure(4, weight=0) # Navegación
         self.grid_columnconfigure(0, weight=1)
 
-        ttk.Label(self, text="Resultados del Análisis Predictivo", font=("Arial", 16, "bold")).grid(row=0, column=0, pady=15)
+        # 1. Header
+        header_frame = tk.Frame(self, bg="#f0f4f8", height=60)
+        header_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        tk.Label(header_frame, text="Motor de Análisis Predictivo", 
+                 font=("Helvetica", 16, "bold"), bg="#f0f4f8", fg="#004c8c").pack(pady=15)
 
-        self.results_content_frame = ttk.Frame(self)
-        self.results_content_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
-        self.results_content_frame.grid_rowconfigure(0, weight=1)
-        self.results_content_frame.grid_columnconfigure(0, weight=1)
+        # 2. Info
+        frame_info = tk.Frame(self, bg="white")
+        frame_info.grid(row=1, column=0, sticky="ew", padx=20)
 
-        # Botón para generar el análisis/simulación
-        self.analyze_button = ttk.Button(self.results_content_frame, text="Realizar Análisis Predictivo (Simulado)", command=self.perform_predictive_analysis)
-        self.analyze_button.grid(row=0, column=0, pady=20) # Inicialmente en el centro
+        info_text = (
+            "Este módulo ejecuta el motor de Machine Learning sobre la Base de Datos.\n"
+            "Generará los datos históricos y las proyecciones futuras para su consumo en Power BI."
+        )
+        lbl_info = ttk.Label(frame_info, text=info_text, justify="center", style="MLInfo.TLabel")
+        lbl_info.pack(pady=(0, 10))
 
-        nav = ttk.Frame(self)
-        nav.grid(row=2, column=0, pady=20)
-        ttk.Button(nav, text="Volver al Menú", command=lambda: controller.show_menu_principal()).pack(side="left", padx=10)
-        ttk.Button(nav, text="Exportar", command=lambda: controller.show_export_view()).pack(side="right", padx=10)
+        # 3. Área de Resultados
+        self.frame_resultados = tk.Frame(self, bg="white")
+        self.frame_resultados.grid(row=2, column=0, padx=40, pady=5, sticky="nsew")
+        self.frame_resultados.grid_rowconfigure(0, weight=1)
+        self.frame_resultados.grid_columnconfigure(0, weight=1)
 
-    def perform_predictive_analysis(self):
-        # Limpiar el frame de contenido si ya hay algo
-        for widget in self.results_content_frame.winfo_children():
-            if widget != self.analyze_button: # No borrar el botón de análisis aún
-                widget.destroy()
-
-        # Quitar el botón después de la primera vez que se presiona
-        if self.analyze_button.winfo_exists():
-            self.analyze_button.destroy()
-
-        traffic_df = self.parent.traffic_df
-        accidents_df = self.parent.accidents_df
-
-        if traffic_df is None or accidents_df is None:
-            messagebox.showwarning("Datos Faltantes", "Por favor, cargue ambos CSV (Tráfico y Siniestralidad) en la página anterior.")
-            controller.show_menu_principal() # O la vista donde se cargan los CSVs
-            return
+        # Frame de Logs
+        self.frame_logs = tk.Frame(self.frame_resultados, bg="white")
+        self.frame_logs.grid(row=0, column=0, sticky="nsew")
         
-        # Simulación de Unión y Preprocesamiento
-        # Asumir que ambos tienen una columna 'Mes' o simplemente usar los índices para simplificar
+        self.lbl_progreso = tk.Label(self.frame_logs, text="Estado: Sistema en espera.", 
+                                     font=("Helvetica", 10, "bold"), bg="white", fg="#004c8c")
+        self.lbl_progreso.pack(anchor="w", pady=(0, 5))
+
+        frame_consola_borde = tk.Frame(self.frame_logs, bg="#cccccc", bd=1)
+        frame_consola_borde.pack(fill="both", expand=True)
+        
+        self.txt_status = scrolledtext.ScrolledText(
+            frame_consola_borde, wrap=tk.WORD, height=10, state='disabled', 
+            font=("Consolas", 9), bg="#f9f9f9", fg="#333333", relief="flat"
+        )
+        self.txt_status.pack(fill="both", expand=True, padx=1, pady=1)
+
+        # 4. Botones de Acción
+        frame_acciones = tk.Frame(self, bg="white")
+        frame_acciones.grid(row=3, column=0, pady=15)
+
+        self.btn_prediccion = tk.Button(
+            frame_acciones, text="▶ Ejecutar Motor ML", 
+            bg="#004c8c", fg="white", font=("Helvetica", 10, "bold"),
+            relief="flat", padx=20, pady=8, cursor="hand2",
+            command=self.iniciar_proceso_en_thread
+        )
+        self.btn_prediccion.pack(side=tk.LEFT, padx=10)
+
+        # Botón para abrir la carpeta donde se guardan los archivos para Power BI
+        self.btn_abrir_carpeta = tk.Button(
+            frame_acciones, text="📂 Abrir Carpeta Resultados", 
+            bg="#00a2e8", fg="white", font=("Helvetica", 10, "bold"),
+            relief="flat", padx=15, pady=8, cursor="hand2",
+            state="disabled", command=self.abrir_carpeta_resultados
+        )
+        self.btn_abrir_carpeta.pack(side=tk.LEFT, padx=10)
+        
+        # Botón Toggle Gráfico (Opcional, para vista rápida)
+        self.btn_toggle_vista = tk.Button(
+            frame_acciones, text="👁 Vista Previa Gráfica", 
+            bg="gray", fg="white", font=("Helvetica", 10),
+            relief="flat", padx=15, pady=8, cursor="hand2",
+            state="disabled", command=self.__alternar_vista
+        )
+        self.btn_toggle_vista.pack(side=tk.LEFT, padx=10)
+
+        # 5. Navegación
+        frame_nav = tk.Frame(self, bg="white")
+        frame_nav.grid(row=4, column=0, pady=(0, 30))
+        ttk.Button(frame_nav, text="Volver al Menú", command=lambda: controller.show_menu_principal()).pack()
+
+    # --- Lógica ---
+
+    def iniciar_proceso_en_thread(self):
+        if self.canvas_widget:
+            self.canvas_widget.destroy()
+            self.canvas_widget = None
+        
+        self.__resetear_vista()
+        self.btn_prediccion.config(state="disabled", text="Procesando...", bg="#cccccc")
+        self.frame_logs.grid()
+
+        self.ml_thread = threading.Thread(target=self.ejecutar_analisis)
+        self.ml_thread.start()
+    
+    def ejecutar_analisis(self):
         try:
-            # Intentar cruzar por una columna común si existe (ej. 'Mes', 'Fecha', 'Periodo')
-            # Esto es un placeholder, en un caso real se necesitaría una lógica de unión robusta y manejo de fechas.
+            self.progreso_callback("Conectando a Base de Datos...", 5)
+            # Sin filtros, procesamos todo para generar el dataset maestro
+            self.modelo.realizar_prediccion(callback=self.progreso_callback)
             
-            # Para este prototipo, vamos a usar los índices como si fueran periodos de tiempo
-            # Y forzar que tengan la misma longitud para el ejemplo
-            min_rows = min(len(traffic_df), len(accidents_df))
+            self.progreso_callback("Renderizando vista previa...", 90)
+            fig = self.modelo.fig
+
+            if fig:
+                self.after(0, lambda: self.__crear_y_mostrar_grafico(fig))
             
-            # Simular que el tráfico influye en los accidentes
-            # Seleccionar una columna numérica de cada DF para la simulación
-            # Usar la primera columna numérica si no hay una obvia, o pedir al usuario que la elija
-            traffic_col = None
-            for col in traffic_df.columns:
-                if pd.api.types.is_numeric_dtype(traffic_df[col]):
-                    traffic_col = col
-                    break
+            self.progreso_callback("Exportando datos para Power BI...", 95)
+            self.progreso_callback("¡Proceso Completado Exitosamente!", 100)
             
-            accidents_col = None
-            for col in accidents_df.columns:
-                if pd.api.types.is_numeric_dtype(accidents_df[col]):
-                    accidents_col = col
-                    break
-
-            if traffic_col is None or accidents_col is None:
-                messagebox.showerror("Error de Datos", "Asegúrese de que ambos CSV contengan al menos una columna numérica para el análisis simulado.")
-                return
-
-            X = traffic_df[traffic_col].head(min_rows).values.reshape(-1, 1) # Variable independiente de Tráfico
-            y = accidents_df[accidents_col].head(min_rows).values # Variable dependiente de Siniestralidad
-
-            # Simulación de Modelo Predictivo de Regresión Lineal Simple
-            model = LinearRegression()
-            model.fit(X, y)
-
-            # Generar Predicción
-            # Para el prototipo, se predice la siniestralidad para valores futuros de tráfico.
-            # Podemos simular que el tráfico aumentará ligeramente o se mantendrá estable.
-            # Se toman los últimos 5 valores de tráfico y "extrapolamos"
-            last_traffic_value = X[-1][0]
-            future_traffic_values = np.array([last_traffic_value + 10 * i for i in range(1, 6)]).reshape(-1, 1)
+            self.after(0, lambda: messagebox.showinfo("Éxito", "Datos generados para Power BI."))
+            self.after(0, lambda: self.btn_abrir_carpeta.config(state="normal", bg="#00a2e8"))
             
-            # Predicciones de siniestralidad para los valores de tráfico existentes y futuros
-            predicted_accidents_existing = model.predict(X)
-            predicted_accidents_future = model.predict(future_traffic_values)
-
-            # Preparar datos para el gráfico y la exportación
-            # Crear un DataFrame combinado para visualización y exportación
-            combined_data = pd.DataFrame({
-                'Tráfico_Observado': X.flatten(),
-                'Siniestralidad_Observada': y.flatten(),
-                'Siniestralidad_Estimada': predicted_accidents_existing.flatten()
-            })
-            
-            future_data = pd.DataFrame({
-                'Tráfico_Predicho': future_traffic_values.flatten(),
-                'Siniestralidad_Predicha': predicted_accidents_future.flatten()
-            })
-
-            # Almacenar los resultados combinados en self.parent.prediction_results_df
-            # Esto es lo que se exportará como CSV
-            self.parent.prediction_results_df = pd.concat([combined_data, future_data], axis=1)
-            messagebox.showinfo("Análisis Completado", "Análisis predictivo simulado realizado exitosamente.")
-
-            # Generar Gráfico
-            self.fig, ax = plt.subplots(figsize=(8, 5))
-            ax.scatter(X, y, color='blue', label='Datos Observados (Tráfico vs Siniestralidad)')
-            ax.plot(X, predicted_accidents_existing, color='red', label='Línea de Tendencia (Regresión Simulada)')
-            ax.scatter(future_traffic_values, predicted_accidents_future, color='green', marker='X', s=100, label='Predicciones Futuras')
-
-            ax.set_title("Tráfico vs Siniestralidad con Predicción Simulada")
-            ax.set_xlabel(f"Tráfico Mensual ({traffic_col})")
-            ax.set_ylabel(f"Siniestralidad ({accidents_col})")
-            ax.legend()
-            ax.grid(True)
-
-            # Almacenar la figura para exportación
-            self.parent.predicted_plot_fig = self.fig
-
-            canvas = FigureCanvasTkAgg(self.fig, master=self.results_content_frame)
-            canvas_widget = canvas.get_tk_widget()
-            canvas_widget.grid(row=0, column=0, sticky="nsew", padx=5, pady=5) # El gráfico ahora toma la posición 0,0
-
-            canvas.draw()
-
         except Exception as e:
-            messagebox.showerror("Error en Análisis", f"Ocurrió un error durante el análisis simulado:\n{e}\n\nAsegúrese de que los CSVs contengan columnas numéricas relevantes para 'tráfico' y 'siniestralidad'.")
-            # Volver a mostrar el botón si hay un error
-            self.analyze_button = ttk.Button(self.results_content_frame, text="Realizar Análisis Predictivo (Simulado)", command=self.perform_predictive_analysis)
-            self.analyze_button.grid(row=0, column=0, pady=20)
+            traceback.print_exc()
+            self.progreso_callback(f"Error crítico: {e}")
+            self.after(0, lambda: messagebox.showerror("Error", str(e)))
+        finally:
+            self.after(0, lambda: self.btn_prediccion.config(state="normal", text="▶ Ejecutar Motor ML", bg="#004c8c"))
 
+    def abrir_carpeta_resultados(self):
+        try:
+            # Asumiendo que el modelo guarda la ruta en self.modelo.ruta_salida
+            # O usamos la configuración
+            from config_manager import obtener_ruta
+            ruta = obtener_ruta("ruta_predicciones")
+            os.startfile(ruta)
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo abrir la carpeta: {e}")
 
-    def get_plot_figure(self):
-        # Ahora devuelve la figura almacenada
-        return self.parent.predicted_plot_fig
+    # Funciones auxiliares estándar...
+    def progreso_callback(self, mensaje, porcentaje=None):
+        if not self.winfo_exists(): return
+        self.after(0, self.__actualizar_gui_callback, mensaje, porcentaje)
+    
+    def __actualizar_gui_callback(self, mensaje, porcentaje=None):
+        self.txt_status.config(state="normal")
+        self.txt_status.insert(tk.END, mensaje + "\n")
+        self.txt_status.see(tk.END)
+        self.txt_status.config(state="disabled")
+        if porcentaje is not None: self.lbl_progreso.config(text=f"Progreso: {porcentaje:.1f}%")
+        self.update_idletasks()
+    
+    def __resetear_vista(self):
+        self.lbl_progreso.config(text="Estado: Iniciando...")
+        self.txt_status.config(state="normal")
+        self.txt_status.delete("1.0", tk.END)
+        self.txt_status.config(state="disabled")
+        self.frame_logs.grid()
+        self.btn_toggle_vista.config(state="disabled", bg="gray")
+        self.btn_abrir_carpeta.config(state="disabled", bg="gray")
+
+    def __alternar_vista(self):
+        if self.canvas_widget is None or (self.ml_thread and self.ml_thread.is_alive()): return
+        if self.canvas_widget and self.frame_logs.winfo_ismapped():
+            self.frame_logs.grid_remove()
+            self.canvas_widget.grid()
+            self.btn_toggle_vista.config(text="📋 Ver Logs")
+        elif self.canvas_widget:
+            self.canvas_widget.grid_remove()
+            self.frame_logs.grid()
+            self.btn_toggle_vista.config(text="👁 Vista Previa")
+    
+    def __crear_y_mostrar_grafico(self, fig):
+        def crear_canvas():
+            if self.canvas_widget: self.canvas_widget.destroy()
+            canvas = FigureCanvasTkAgg(fig, master=self.frame_resultados)
+            canvas.draw()
+            self.canvas_widget = canvas.get_tk_widget()
+            self.canvas_widget.configure(bg="white")
+            self.canvas_widget.grid(row=0, column=0, sticky="nsew")
+            self.frame_logs.grid_remove()
+            self.btn_toggle_vista.config(state="normal", text="📋 Ver Logs", bg="gray")
+        self.after(0, crear_canvas)

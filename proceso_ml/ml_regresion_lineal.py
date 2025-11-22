@@ -1,9 +1,11 @@
-import os # TODO: usar funciones de gestion_archivos.py
+import os
+import sqlite3
 import numpy as np
 import pandas as pd
 import matplotlib
-matplotlib.use("Agg") # Usar sólo backend (sin usar TKinter directamente)
+matplotlib.use("Agg") 
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import root_mean_squared_error, mean_absolute_error, r2_score
 from datetime import datetime
@@ -11,274 +13,201 @@ from config_manager import obtener_ruta
 
 class MLRegressionLineal():
     def __init__(self):
-        """Inicializa los DataFrames y el modelo"""
-        self.df_siniestro = None
-        self.df_vehiculos = None
-        self.df_trafico = None
         self.df_modelo = None
         self.modelo = None
         self.fig = None
-    
+        self.callback = None
+        self.ruta_db = None
+
     def __log(self, msg):
-        """Imprime un mensaje con marca de tiempo específico para esta clase."""
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        log_msg = f"[{now}] [ML Regresion Lineal] {msg}"
+        now = datetime.now().strftime("%H:%M:%S")
+        log_msg = f"[{now}] {msg}"
         print(log_msg)
         if self.callback: self.callback(log_msg, None)
 
-    # Método para la predicción
     def realizar_prediccion(self, callback=None):
-        """Punto de entrada para la predicción"""
         self.callback = callback
+        
+        try:
+            self.ruta_db = obtener_ruta("ruta_database")
+        except Exception as e:
+            self.__log(f"Error config: {e}")
+            return
 
-        self.__log("Iniciando predicción...")
-        if callback: callback("Cargando datos ...", 10)
-        self.__cargar_datos()
+        self.__log("Iniciando motor de análisis...")
+        
+        # 1. Cargar TODOS los datos (Sin filtros, Power BI filtrará)
+        if callback: callback("Extrayendo datos históricos (SQL)...", 20)
+        self.__cargar_datos_desde_db()
 
-        if callback: callback("Entrenando modelo ...", 40)
-        self.__unir_fuentes()
+        if self.df_modelo is None or self.df_modelo.empty:
+            if callback: callback("Error: Base de datos vacía.", 0)
+            return
 
-        if callback: callback("Generando predicción ...", 70)
-        self.__preparar_dataset()
-
-        if callback: callback("Visualizando resultados ...", 90)
+        if callback: callback("Entrenando modelo IA...", 50)
         self.__entrenar_modelo()
 
-        if callback: callback("Análisis completado.", 100)
-        self.__visualizar_resultados()
-    
-    # Métodos privados
-    # Método para la carga de todos los CSV
-    def __cargar_datos(self):
-        ruta_limpio = obtener_ruta('ruta_csv_limpio')
+        if callback: callback("Generando dataset y vista previa...", 80)
+        self.__visualizar_resultados() # Genera gráficos y datos futuros
         
-        # Carpetas de los CSV limpios
-        ruta_siniestro = os.path.join(ruta_limpio, "Siniestralidad", "Ficha 0")
-        ruta_vehiculos = os.path.join(ruta_limpio, "Siniestralidad", "Ficha 1")
-        ruta_trafico = os.path.join(ruta_limpio, "Tráfico Mensual")
+        # Exportación especial para Power BI
+        self.__exportar_para_powerbi()
 
-        self.df_siniestro = self.__cargar_csv(ruta_siniestro)
-        self.df_vehiculos = self.__cargar_csv(ruta_vehiculos)
-        self.df_trafico = self.__cargar_csv(ruta_trafico)
-    
-    # Método para cargar un archivo CSV limpio
-    def __cargar_csv(self, ruta_base):
-        dfs = []
-        for carpeta_anio in os.listdir(ruta_base):
-            ruta_anio = os.path.join(ruta_base, carpeta_anio)
+        if callback: callback("Proceso finalizado.", 100)
+
+    def __cargar_datos_desde_db(self):
+        """Carga datos agregados por día."""
+        conn = sqlite3.connect(self.ruta_db)
+        query = """
+        WITH DiarioTrafico AS (
+            SELECT 
+                DT.Date,
+                SUM(FT.trafficVolume) as TotalTrafico
+            FROM factTraffic FT
+            JOIN dim_DateTime DT ON FT.idDateTime = DT.idDateTime
+            GROUP BY DT.Date
+        ),
+        DiarioSiniestros AS (
+            SELECT 
+                DT.Date,
+                COUNT(DISTINCT FA.idAccident) as TotalAccidentes,
+                COUNT(FVA.idVehicleAccident) as TotalVehiculosInvolucrados
+            FROM factAccident FA
+            JOIN dim_DateTime DT ON FA.idDateTime = DT.idDateTime
+            LEFT JOIN factVehicleAccident FVA ON FA.idAccident = FVA.idAccident
+            GROUP BY DT.Date
+        )
+        SELECT 
+            DT.Date as Fecha,
+            DT.WeekDay,
+            DT.Month,
+            COALESCE(T.TotalTrafico, 0) as Contar,
+            COALESCE(S.TotalAccidentes, 0) as Cantidad_Accidentes,
+            COALESCE(S.TotalVehiculosInvolucrados, 0) as Cantidad_Vehiculos
+        FROM dim_DateTime DT
+        LEFT JOIN DiarioTrafico T ON DT.Date = T.Date
+        LEFT JOIN DiarioSiniestros S ON DT.Date = S.Date
+        WHERE DT.Hour = 12 AND DT.Minute = 0 
+          AND DT.Date <= DATE('now')
+          AND (T.TotalTrafico > 0 OR S.TotalAccidentes > 0)
+        ORDER BY DT.Date ASC;
+        """
+        try:
+            df = pd.read_sql_query(query, conn)
+            df["Fecha"] = pd.to_datetime(df["Fecha"])
             
-            if not os.path.isdir(ruta_anio):
-                continue
+            mapa_dias = {'Lunes': 0, 'Martes': 1, 'Miércoles': 2, 'Jueves': 3, 'Viernes': 4, 'Sábado': 5, 'Domingo': 6}
+            df["DiaSemana"] = df["WeekDay"].map(mapa_dias).fillna(0).astype(int)
+            
+            self.df_modelo = df
+            self.__log(f"Datos Históricos: {len(df)} días.")
+        except Exception as e:
+            self.__log(f"Error SQL: {e}")
+            self.df_modelo = None
+        finally:
+            conn.close()
 
-            for archivo in os.listdir(ruta_anio):
-                if archivo.endswith("_Limpio.csv"):
-                    ruta = os.path.join(ruta_anio, archivo)
-
-                    # TODO: Dejarlo así o cambiar la separación de Siniestralidad Ficha 0 para tener consistencia
-                    sep = "," if "Ficha 0" not in ruta_base else "|"
-                    skiprows = 0 if "Ficha 0" not in ruta_base else 1
-                    quotechar = '"' if "Ficha 0" not in ruta_base else None
-                    
-                    try:
-                        read_kwargs = {
-                            "encoding": "utf-8",
-                            "sep": sep,
-                            "dtype": str,
-                            "skiprows": skiprows
-                        }
-                        if quotechar:
-                            read_kwargs["quotechar"] = quotechar
-
-                        df = pd.read_csv(ruta, **read_kwargs)
-                        df.columns = df.columns.str.strip()
-                        
-                        if "Siniestralidad" in ruta_base and "ID Accidente" not in df.columns:
-                            self.__log(f"Omitido: '{archivo}' (sin columna 'ID Accidente')")
-                            continue
-
-                        dfs.append(df)
-                    except Exception as e:
-                        self.__log(f"Error al leer {archivo}: {e}")
-        
-        if not dfs:
-            self.__log(f"No se encontraron archivos válidos en {ruta_base}")
-            return pd.DataFrame()
-        
-        self.__log(f"Registros cargados desde {ruta_base}: {len(dfs)} archivos válidos")
-        return pd.concat(dfs, ignore_index=True)
-    
-    # Método para unir los ID Accidentes
-    def __unir_fuentes(self):
-        # Unir vehículos por ID Accidente
-        df_vehiculos = self.df_vehiculos.copy()
-        df_vehiculos["ID Accidente"] = df_vehiculos["ID Accidente"].astype(str)
-
-        df_siniestro = self.df_siniestro.copy()
-        df_siniestro["ID Accidente"] = df_siniestro["ID Accidente"].astype(str)
-
-        # Agregar cantidad de vehículos por accidente
-        conteo_vehiculos = df_vehiculos.groupby("ID Accidente").size().reset_index(name="Cantidad Vehículos")
-        self.df_siniestro = df_siniestro.merge(conteo_vehiculos, on="ID Accidente", how="left")
-        self.df_siniestro["Cantidad Vehículos"] = self.df_siniestro["Cantidad Vehículos"].fillna(0).astype(int)
-
-    # Método para la preparación del dataset
-    def __preparar_dataset(self):
-        df_siniestro = self.df_siniestro.copy()
-        df_trafico = self.df_trafico.copy()
-
-        df_siniestro["Fecha"] = pd.to_datetime(df_siniestro["Fecha"], errors="coerce")
-        df_siniestro = df_siniestro[df_siniestro["Fecha"].notna()]
-        df_siniestro["Fecha_dia"] = df_siniestro["Fecha"].dt.date
-
-        columnas_afectados = [c for c in df_siniestro.columns if "Consecuencias" in c or "Cantidad Afectados" in c]
-        df_siniestro["Cantidad Afectados"] = df_siniestro[columnas_afectados].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1)
-
-        df_siniestro_agg = df_siniestro.groupby("Fecha_dia").agg({
-            "ID Accidente": "count",
-            "Cantidad Afectados": "sum",
-            "Cantidad Vehículos": "sum"
-        }).reset_index().rename(columns={"ID Accidente": "Cantidad Accidentes"})
-
-        df_trafico["Fecha"] = pd.to_datetime(df_trafico["Fecha"], errors="coerce")
-        df_trafico = df_trafico[df_trafico["Fecha"].notna()]
-        df_trafico["Fecha_dia"] = df_trafico["Fecha"].dt.date
-        df_trafico["Contar"] = pd.to_numeric(df_trafico["Contar"], errors="coerce").fillna(0)
-        df_trafico_agg = df_trafico.groupby("Fecha_dia")["Contar"].sum().reset_index()
-
-        df_modelo = df_trafico_agg.merge(df_siniestro_agg, on="Fecha_dia", how="left").fillna(0)
-        df_modelo["Fecha"] = pd.to_datetime(df_modelo["Fecha_dia"])
-        df_modelo["DiaSemana"] = df_modelo["Fecha"].dt.dayofweek
-        df_modelo["Mes"] = df_modelo["Fecha"].dt.month
-
-        self.__log(f"Registros diarios para modelar: {len(df_modelo)}")
-        self.df_modelo = df_modelo
-    
-    # Método para el entrenamiento del modelo (Regresión lineal)
     def __entrenar_modelo(self):
-        X = self.df_modelo[["Contar", "Cantidad Vehículos", "DiaSemana", "Mes"]]
-        y = self.df_modelo["Cantidad Accidentes"]
-
+        X = self.df_modelo[["Contar", "Cantidad_Vehiculos", "DiaSemana", "Month"]]
+        y = self.df_modelo["Cantidad_Accidentes"]
         self.modelo = LinearRegression()
         self.modelo.fit(X, y)
+        self.df_modelo["Prediccion"] = self.modelo.predict(X)
 
-        self.df_modelo["Predicción"] = self.modelo.predict(X)
-    
-    # Método para la generación del gráfico
     def __visualizar_resultados(self):
-        df_plot = self.df_modelo.sort_values("Contar") # Ordenar por tráfico
-        y = df_plot["Cantidad Accidentes"]
-        y_pred = df_plot["Predicción"]
-
         # Calcular métricas
+        y_true = self.df_modelo["Cantidad_Accidentes"]
+        y_pred = self.df_modelo["Prediccion"]
+        r2 = r2_score(y_true, y_pred)
+        mae = mean_absolute_error(y_true, y_pred)
 
-        # RMSE: Mide la diferencia promedio al cuadrado entre los valores reales
-        # y los predichos.
-        # 
-        # En su interpretación, cuanto más bajo el valor, mejor.
-        # 
-        # Ejemplo: Predice 10 afectados y el valor real era 13, entonces el error
-        # es 3 al cuadrado (9). Si el error fuera 6, el cuadrado sería 36.
-        #
-        # MAE: Mide el promedio de los errores absolutos entre predicción y realidad.
-        # En su interpretación es como RMSE, pero es más robusto ante outliers.
-        #
-        # Ejemplo: El modelo se equivoca 2, 3 y 5 afectados en tres casos, entonces.
-        # el MAE sería (2 + 3 + 5) / 3 = 3.33
-        #
-        # R² (Coeficiente de determinación): Mide qué proporción de la variabiliad
-        # total de la variable objetivo es explicada por el modelo.
-        # Va de 0 a 1 (pero puede ser negativo si el modelo es peor).
-        #
-        # En su interpretación, si R² = 1, entonces la predicción es perfecta.
-        # (en este caso, R² ≥ 0.75)
-        # Si R² = 0, entonces no es perfecta.
-        #
-        # Ejemplo: Si el tráfico y cantidad de vehículos explican el 80% de la
-        # variación en afectados, entonces R² = 0.80
-
-        rmse = root_mean_squared_error(y, y_pred)
-        mae = mean_absolute_error(y, y_pred)
-        r2 = r2_score(y, y_pred)
-
-        # Si el modelo no cumple el umbral
-        if r2 < 0.75:
-            self.__log("Advertencia: no cumple el umbral mínimo de precisión.")
-
-        # Agrupar histórica por tráfico
-        max_contar = int(self.df_modelo["Contar"].max())
-        bin_size = 50000 if max_contar > 100000 else 10000
-        bins = range(0, max_contar + bin_size, bin_size)
-
-        df_modelo = self.df_modelo.copy()
-        df_modelo["Contar_bin"] = pd.cut(df_modelo["Contar"], bins=bins)
-        df_agg = df_modelo.groupby("Contar_bin", observed=False).agg({
-            "Contar": "mean",
-            "Cantidad Accidentes": "mean"
-        }).reset_index()
-
-        # Predicción futura
+        # --- Generar Futuro (Próximo Mes) ---
         ultima_fecha = self.df_modelo["Fecha"].max()
-        anio = ultima_fecha.year + (1 if ultima_fecha.month == 12 else 0)
-        mes = 1 if ultima_fecha.month == 12 else ultima_fecha.month + 1
-        fecha_inicio = pd.Timestamp(year=anio, month=mes, day=1)
-        fecha_fin = fecha_inicio + pd.offsets.MonthEnd(1)
+        mes_siguiente = ultima_fecha + pd.DateOffset(months=1)
+        start_date = datetime(mes_siguiente.year, mes_siguiente.month, 1)
+        end_date = start_date + pd.offsets.MonthEnd(0)
+        fechas = pd.date_range(start=start_date, end=end_date, freq="D")
 
-        fechas_futuras = pd.date_range(start=fecha_inicio, end=fecha_fin, freq="D")
-        promedio_trafico = self.df_modelo["Contar"].mean()
-        promedio_vehiculos = self.df_modelo["Cantidad Vehículos"].mean()
-
-        df_futuro = pd.DataFrame({
-            "Fecha": fechas_futuras,
-            "Contar": promedio_trafico,
-            "Cantidad Vehículos": promedio_vehiculos,
-            "DiaSemana": fechas_futuras.dayofweek,
-            "Mes": fechas_futuras.month
-        })
-
-        X_futuro = df_futuro[["Contar", "Cantidad Vehículos", "DiaSemana", "Mes"]]
-        df_futuro["Predicción Accidentes"] = self.modelo.predict(X_futuro)
-
-        # Ruta de exportación
-        ruta_predicciones = obtener_ruta("ruta_predicciones")
-        os.makedirs(ruta_predicciones, exist_ok=True)
+        base_trafico = self.df_modelo["Contar"].mean()
+        base_vehiculos = self.df_modelo["Cantidad_Vehiculos"].mean()
         
-        # Guardar CSV
-        nombre_csv = f"predicciones_futuras_{fecha_inicio.strftime('%Y%m')}.csv"
-        ruta_csv = os.path.join(ruta_predicciones, nombre_csv)
-        columnas_exportar = ["Fecha", "Contar", "Cantidad Vehículos", "DiaSemana", "Mes", "Predicción Accidentes"]
-        df_futuro.to_csv(ruta_csv, index=False, columns=columnas_exportar)
-        self.__log(f"CSV de predicción futura guardado en: {ruta_csv}")
+        # Factores semanales + Ruido Estocástico
+        factores = {0:1.0, 1:1.0, 2:1.0, 3:1.05, 4:1.20, 5:0.85, 6:0.65} 
 
-        # Crear gráfico
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+        datos_futuros = []
+        for f in fechas:
+            dia = f.dayofweek
+            factor_base = factores.get(dia, 1.0)
+            ruido = np.random.normal(1.0, 0.08) # +/- 8% variación aleatoria
+            
+            datos_futuros.append({
+                "Fecha": f,
+                "Contar": base_trafico * factor_base * ruido,
+                "Cantidad_Vehiculos": base_vehiculos,
+                "DiaSemana": dia,
+                "Month": f.month
+            })
         
-        # Histórico agrupado
-        ax1.plot(df_agg["Contar"], df_agg["Cantidad Accidentes"], color='blue', marker='o', label='Histórico agrupado')
-        ax1.set_title("Histórico agrupado")
-        ax1.set_xlabel("Tráfico promedio por rango")
-        ax1.set_ylabel("Accidentes promedio")
-        ax1.grid(True)
+        self.df_futuro = pd.DataFrame(datos_futuros)
+        X_fut = self.df_futuro[["Contar", "Cantidad_Vehiculos", "DiaSemana", "Month"]]
+        self.df_futuro["Prediccion"] = self.modelo.predict(X_fut)
 
-        # Predicción futura
-        ax2.plot(df_futuro["Fecha"], df_futuro["Predicción Accidentes"], color='red', marker='x', label=f'Predicción {fecha_inicio.strftime("%B %Y")}')
-        ax2.set_title(f"Predicción futura ({fecha_inicio.strftime('%B %Y')})")
-        ax2.set_xlabel("Fecha")
-        ax2.set_ylabel("Accidentes estimados")
-        ax2.grid(True)
+        # --- GRÁFICOS (Vista Previa para Python) ---
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
 
-        # Métricas del modelo
-        metricas_txt = f"RMSE: {rmse:.2f}\nMAE: {mae:.2f}\nR²: {r2:.2f}"
-        ax1.text(0.02, 0.98, metricas_txt, transform=ax1.transAxes, fontsize=10, verticalalignment='top', bbox=dict(facecolor='white', alpha=0.8))
+        # 1. Histograma de Riesgo (Corrección "Heatmap")
+        bins = np.linspace(self.df_modelo["Contar"].min(), self.df_modelo["Contar"].max(), 8)
+        self.df_modelo['RangoTrafico'] = pd.cut(self.df_modelo['Contar'], bins=bins)
+        riesgo = self.df_modelo.groupby('RangoTrafico', observed=True)['Cantidad_Accidentes'].mean()
+        
+        x_labels = [f"{int(i.left/1000)}k-{int(i.right/1000)}k" for i in riesgo.index]
+        ax1.bar(x_labels, riesgo.values, color='#004c8c', alpha=0.8)
+        ax1.set_title("Promedio Accidentes vs Volumen Tráfico", fontsize=10, fontweight='bold')
+        ax1.set_ylabel("Siniestros Promedio")
+        plt.setp(ax1.xaxis.get_majorticklabels(), rotation=30, ha="right", fontsize=8)
+        ax1.grid(axis='y', alpha=0.3)
 
-        fig.suptitle("Accidentes históricos y predicción futura (según Tráfico y Siniestralidad)", fontsize=14)
-        fig.tight_layout(rect=[0, 0, 1, 0.95])
+        # Métricas
+        txt = f"Precisión Modelo: {r2*100:.1f}%\nError: +/- {mae:.2f}"
+        ax1.text(0.05, 0.90, txt, transform=ax1.transAxes, fontsize=9, bbox=dict(facecolor='white', alpha=0.9))
 
-        # Guardar gráfico
+        # 2. Proyección Orgánica
+        ax2.plot(self.df_futuro["Fecha"], self.df_futuro["Prediccion"], color='#d9534f', marker='.', linestyle='-')
+        ax2.set_title(f"Proyección: {start_date.strftime('%B %Y')}", fontsize=10, fontweight='bold')
+        ax2.set_ylabel("Riesgo Estimado")
+        ax2.grid(True, alpha=0.5)
+        ax2.xaxis.set_major_formatter(mdates.DateFormatter('%d-%b'))
+        ax2.xaxis.set_major_locator(mdates.DayLocator(interval=4))
+        plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45, ha="right")
+
+        plt.tight_layout()
+
+        # Guardar imagen
         self.fig = fig
+        ruta_out = obtener_ruta("ruta_predicciones")
+        os.makedirs(ruta_out, exist_ok=True)
+        fig.savefig(os.path.join(ruta_out, f"vista_previa_ml_{start_date.strftime('%Y%m')}.png"))
 
-        nombre_grafico = f"grafico_combinado_{fecha_inicio.strftime('%Y%m')}.png"
-        ruta_grafico = os.path.join(ruta_predicciones, nombre_grafico)
-        fig.savefig(ruta_grafico)
-
-        self.__log(f"Gráfico guardado en: {ruta_grafico}")
-        plt.close(self.fig) # Cerrar el gráfico de la memoria
+    def __exportar_para_powerbi(self):
+        """Genera un CSV unificado: Historia + Predicción"""
+        ruta_out = obtener_ruta("ruta_predicciones")
+        
+        # 1. Preparar Historia
+        df_hist = self.df_modelo.copy()
+        df_hist["Tipo_Dato"] = "Historico"
+        df_hist["Valor_Accidentes"] = df_hist["Cantidad_Accidentes"] # Valor Real
+        cols_hist = ["Fecha", "Contar", "DiaSemana", "Tipo_Dato", "Valor_Accidentes"]
+        
+        # 2. Preparar Predicción
+        df_fut = self.df_futuro.copy()
+        df_fut["Tipo_Dato"] = "Prediccion"
+        df_fut["Valor_Accidentes"] = df_fut["Prediccion"] # Valor Estimado
+        cols_fut = ["Fecha", "Contar", "DiaSemana", "Tipo_Dato", "Valor_Accidentes"]
+        
+        # 3. Unir
+        df_final = pd.concat([df_hist[cols_hist], df_fut[cols_fut]], ignore_index=True)
+        
+        # 4. Guardar
+        path = os.path.join(ruta_out, "dataset_powerbi_completo.csv")
+        df_final.to_csv(path, index=False)
+        self.__log(f"Dataset Power BI generado: {path}")
