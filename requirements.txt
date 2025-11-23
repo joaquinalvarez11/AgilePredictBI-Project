@@ -2,3 +2,5 @@
 xlrd
 PyPDF2
 watchdog
+msal
+cryptography

@@ -1,13 +1,32 @@
 import json
 import os
+import sys
 
 # 1. Obtener la ruta absoluta de este archivo
 #    __file__ contiene la ruta del script actual.
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
+# TODO:
+# Definir exactamente dónde guardar la ruta de la base de datos (puede ser en la carpeta con los CSV o en %appdata%),
+# en vez del raíz del proyecto
+
+# Función para obtener la ruta de recursos (sin uso por el momento)
+def resource_path(relative_path: str) -> str:
+    """
+    Devuelve la ruta absoluta al recurso, compatible con ejecución normal y compilada.
+    """
+    # Si está compilado
+    if hasattr(sys, "_MEIPASS"):
+        return os.path.join(sys._MEIPASS, relative_path)
+    
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), relative_path)
+
 # 2. Construir la ruta al config.json
 #    Como config_manager.py está en el raíz, el config está en "config/config.json"
 CONFIG_FILE = os.path.join(script_dir, 'config', 'config.json')
+
+APPDATA_DIR = os.path.join(os.getenv("APPDATA"), "SCRDA")
+USER_BASE_FILE = os.path.join(APPDATA_DIR, "user_base.txt")
 
 def cargar_configuracion():
     """
@@ -21,19 +40,46 @@ def cargar_configuracion():
         config = json.load(f)
     return config
 
+def cargar_ruta_base():
+    """
+    Lee la carpeta principal definida por el usuario.
+    """
+    if os.path.exists(USER_BASE_FILE):
+        with open(USER_BASE_FILE, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    return ""
+
+def guardar_ruta_base(ruta_base):
+    """
+    Guarda la carpeta principal.
+    """
+    os.makedirs(APPDATA_DIR, exist_ok=True)
+    with open(USER_BASE_FILE, "w", encoding="utf-8") as f:
+        f.write(ruta_base)
+
 def obtener_ruta(nombre_ruta):
     """
-    Obtiene una ruta específica del archivo de configuración.
+    Obtiene una ruta específica del archivo de configuración + la carpeta principal.
     """
     config = cargar_configuracion()
-    path = config.get(nombre_ruta)
+    relativa = config.get(nombre_ruta)
     
-    if not path:
+    if not relativa:
         raise KeyError(f"La clave de ruta '{nombre_ruta}' no se encontró en el config.json")
     
-    if not os.path.isabs(path):
-        path = os.path.join(script_dir, path)
-        
+    ruta_base = cargar_ruta_base()
+    
+    # TODO: Cambiar esto después
+    if nombre_ruta != "ruta_database":
+        if not ruta_base:
+            raise RuntimeError("La carpeta base no está definida. Selecciónela en el menú principal antes de continuar.")
+        path = os.path.join(ruta_base, relativa)
+    else:
+        if not os.path.isabs(relativa):
+            path = os.path.join(script_dir, relativa)
+        else:
+            path = relativa
+    
     path = os.path.normpath(path)
 
     # Aseguramos que la carpeta exista antes de devolver la ruta
