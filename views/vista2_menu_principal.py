@@ -118,8 +118,8 @@ class VistaMenuPrincipal(tk.Frame):
     def seleccionar_ruta(self):
         ruta = filedialog.askdirectory(title="Seleccionar Carpeta Principal")
         if ruta:
-            self.entry_ruta.delete(0, tk.END)
-            self.entry_ruta.insert(0, ruta)
+            # Actualizar el campo
+            self.ruta_var.set(ruta)
             self.controller.ruta_base = ruta
             guardar_ruta_base(ruta)
     
