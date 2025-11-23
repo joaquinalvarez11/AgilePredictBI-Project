@@ -1,7 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import os
-from config_manager import cargar_ruta_base, guardar_ruta_base
+from config_manager import obtener_ruta, cargar_ruta_base, guardar_ruta_base
 # from utils.backup_manager import BackupManager
 
 class VistaMenuPrincipal(tk.Frame):
@@ -54,6 +54,9 @@ class VistaMenuPrincipal(tk.Frame):
         self.ruta_var = tk.StringVar()
         self.entry_ruta = ttk.Entry(ruta_frame, width=50, textvariable=self.ruta_var, state="readonly")
         self.entry_ruta.pack(side="left")
+
+        self.lbl_ejemplo = ttk.Label(ruta_frame, text=".../SCRDA Excel/", foreground="#666666")
+        self.lbl_ejemplo.pack(side="left", padx=(10, 0))
 
         btn_ruta = ttk.Button(ruta_frame, text="📂", width=3, command=self.seleccionar_ruta)
         btn_ruta.pack(side="left", padx=(10, 0))
@@ -139,10 +142,34 @@ class VistaMenuPrincipal(tk.Frame):
             messagebox.showerror("Error", "Carpeta principal no definida o no existe.\nDebe definir una carpeta principal válida antes de respaldar.")
             return
         
+        # Validar si existen
+        rutas = {
+            "CSV limpios": obtener_ruta("ruta_csv_limpio"),
+            "Predicciones": obtener_ruta("ruta_predicciones"),
+            "Base de datos": obtener_ruta("ruta_database")
+        }
+
+        existentes = []
+        for nombre, ruta in rutas.items():
+            # Base de datos
+            if os.path.isfile(ruta):
+                existentes.append(f"{nombre}: {ruta}")
+            # CSV limpios o Predicciones
+            elif os.path.isdir(ruta):
+                archivos = os.listdir(ruta)
+                if archivos:
+                    arch_msg = "archivo" if len(archivos) == 1 else "archivos"
+                    existentes.append(f"{nombre}: {ruta} ({len(archivos)} {arch_msg})")
+
+        if not existentes:
+            messagebox.showerror("Error", "No se encontró ningún archivo o carpeta para respaldar.\nDebe realizar al menos un proceso antes de respaldar.")
+            return
+        
         try:
             # TODO: Registrar la aplicación para el acceso a OneDrive
             # self.backup_manager.respaldar()
-            messagebox.showinfo("Respaldar", "Respaldo completado en OneDrive.")
+            msg = "Respaldo completado en OneDrive.\n\nSe incluyeron:\n\n- " + "\n- ".join(existentes)
+            messagebox.showinfo("Respaldar", msg)
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo realizar el respaldo:\n{e}")
     
