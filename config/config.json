@@ -2,5 +2,5 @@
   "ruta_excel_bruto": "SCRDA Excel/Excel Brutos/",
   "ruta_csv_limpio": "SCRDA Excel/Excel Limpios/",
   "ruta_predicciones": "SCRDA Excel/Predicciones/",
-  "ruta_database": "database/ruta_algarrobo.db"
+  "ruta_database": "SCRDA Excel/database/ruta_algarrobo.db"
 }

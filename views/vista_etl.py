@@ -9,8 +9,7 @@ from proceso_etl import deteccion_auto
 current_dir = os.path.dirname(__file__)
 project_root = os.path.abspath(os.path.join(current_dir, '..'))
 proceso_db_path = os.path.join(project_root, 'proceso_db')
-sys.path.append(proceso_db_path)
-import cargar_bd
+from proceso_db import cargar_bd
 
 class VistaETL(tk.Frame):
     def __init__(self, parent, controller):

@@ -6,10 +6,6 @@ import sys
 #    __file__ contiene la ruta del script actual.
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
-# TODO:
-# Definir exactamente dónde guardar la ruta de la base de datos (puede ser en la carpeta con los CSV o en %appdata%),
-# en vez del raíz del proyecto
-
 # Función para obtener la ruta de recursos (sin uso por el momento)
 def resource_path(relative_path: str) -> str:
     """
@@ -23,7 +19,7 @@ def resource_path(relative_path: str) -> str:
 
 # 2. Construir la ruta al config.json
 #    Como config_manager.py está en el raíz, el config está en "config/config.json"
-CONFIG_FILE = os.path.join(script_dir, 'config', 'config.json')
+CONFIG_FILE = resource_path(os.path.join('config', 'config.json'))
 
 APPDATA_DIR = os.path.join(os.getenv("APPDATA"), "SCRDA")
 USER_BASE_FILE = os.path.join(APPDATA_DIR, "user_base.txt")
@@ -68,18 +64,10 @@ def obtener_ruta(nombre_ruta):
         raise KeyError(f"La clave de ruta '{nombre_ruta}' no se encontró en el config.json")
     
     ruta_base = cargar_ruta_base()
+    if not ruta_base:
+        raise RuntimeError("La carpeta base no está definida. Selecciónela en el menú principal antes de continuar.")
     
-    # TODO: Cambiar esto después
-    if nombre_ruta != "ruta_database":
-        if not ruta_base:
-            raise RuntimeError("La carpeta base no está definida. Selecciónela en el menú principal antes de continuar.")
-        path = os.path.join(ruta_base, relativa)
-    else:
-        if not os.path.isabs(relativa):
-            path = os.path.join(script_dir, relativa)
-        else:
-            path = relativa
-    
+    path = os.path.join(ruta_base, relativa)
     path = os.path.normpath(path)
 
     # Aseguramos que la carpeta exista antes de devolver la ruta

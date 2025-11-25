@@ -3,6 +3,11 @@ import time
 import sys
 import subprocess
 
+# TODO: En el programa compilado no se reconocen las rutas definidas de este script.
+# Implicaría en refactorizar este y los demás scripts de proceso_db.
+# En lugar de usar subprocess, convertirlos en módulos,
+# para después llamar una función como "run(callback)"
+
 # --- 0. Definir rutas basadas en la ubicación de este script ---
 base_path = os.path.dirname(__file__)
 scripts_path = os.path.join(base_path, "scripts")
