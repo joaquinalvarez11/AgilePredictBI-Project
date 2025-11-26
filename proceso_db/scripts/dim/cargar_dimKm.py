@@ -1,25 +1,7 @@
 import sqlite3
 import pandas as pd
 import numpy as np
-import time
-import os
-import sys
-
-# 1. Añadir el directorio raíz del proyecto al path
-current_dir = os.path.dirname(__file__)
-# Subimos TRES niveles (desde /proceso_db/scripts/dim/ hasta el raíz)
-project_root = os.path.abspath(os.path.join(current_dir, '..', '..', '..'))
-sys.path.append(project_root)
-
-# 2. Importar el gestor de configuración
 from config_manager import obtener_ruta
-
-try:
-    # 3. Obtener la ruta desde config.json
-    ruta_db = obtener_ruta("ruta_database")
-except Exception as e:
-    print(f"Error al cargar ruta_database desde config_manager: {e}")
-    sys.exit(1)
 
 # --- Configuración ---
 km_start = 473.000
@@ -60,57 +42,67 @@ map_places = [
 # Ordenar el mapa por Km para un procesamiento correcto
 map_places.sort(key=lambda x: x[0])
 
-print("Generando rango de Kms (por metro)...")
+def run(callback):
+    """
+    Carga la dimensión Km en la base de datos.
+    Recibe un callback para enviar mensajes de log.
+    """
 
-# 1. Generar todos los Kms
-total_points = int((km_end - km_start) / precision) + 1
-kms = np.linspace(km_start, km_end, total_points)
-kms_rounded = np.round(kms, 3) # Redondear para evitar errores de punto flotante
+    try:
+        ruta_db = obtener_ruta("ruta_database")
+        callback("Generando rango de Kms (por metro)...")
 
-df = pd.DataFrame({'Km': kms_rounded})
-df['idKm'] = range(1, len(df) + 1)
-df['Element'] = None
-df['Place'] = None
+        # 1. Generar todos los Kms
+        total_points = int((km_end - km_start) / precision) + 1
+        kms = np.linspace(km_start, km_end, total_points)
+        kms_rounded = np.round(kms, 3) # Redondear para evitar errores de punto flotante
 
-print(f"Se generaron {len(df)} filas (metros). Aplicando lógica de lugares...")
+        df = pd.DataFrame({'Km': kms_rounded})
+        df['idKm'] = range(1, len(df) + 1)
+        df['Element'] = None
+        df['Place'] = None
 
-# 2. Aplicar lógica de "15 metros"
-for km_place, element, place in map_places:
-    # Definir el rango de 15 metros (0.015 km)
-    km_inicio_rango = km_place
-    km_fin_rango = np.round(km_place + 0.015, 3)
-    
-    # Encontrar todas las filas del DataFrame que caen en este rango
-    mask = (df['Km'] >= km_inicio_rango) & (df['Km'] <= km_fin_rango)
-    
-    df.loc[mask, 'Element'] = element
-    df.loc[mask, 'Place'] = place
+        callback(f"Se generaron {len(df)} filas (metros). Aplicando lógica de lugares...")
 
-print("Lógica de lugares aplicada.")
+        # 2. Aplicar lógica de "15 metros"
+        for km_place, element, place in map_places:
+            # Definir el rango de 15 metros (0.015 km)
+            km_inicio_rango = km_place
+            km_fin_rango = np.round(km_place + 0.015, 3)
+            
+            # Encontrar todas las filas del DataFrame que caen en este rango
+            mask = (df['Km'] >= km_inicio_rango) & (df['Km'] <= km_fin_rango)
+            
+            df.loc[mask, 'Element'] = element
+            df.loc[mask, 'Place'] = place
 
-# 3. Seleccionar y ordenar las columnas finales
-columnas_finales = ['idKm', 'Km', 'Element', 'Place']
-df_final = df[columnas_finales]
+        callback("Lógica de lugares aplicada.")
 
-# 4. Conectar y cargar a SQLite
-print("Conectando a la base de datos...")
-conn = sqlite3.connect(ruta_db)
-cursor = conn.cursor()
+        # 3. Seleccionar y ordenar las columnas finales
+        columnas_finales = ['idKm', 'Km', 'Element', 'Place']
+        df_final = df[columnas_finales]
 
-try:
-    cursor.execute("SELECT COUNT(*) FROM dim_Km")
-    count = cursor.fetchone()[0]
-    
-    if count == 0:
-        print(f"Tabla dim_Km vacía. Cargando {len(df_final)} registros...")
-        df_final.to_sql("dim_Km", conn, if_exists="append", index=False)
-        conn.commit()
-        print(f"Éxito: Se cargaron {len(df_final)} registros en dim_Km.")
-    else:
-        print(f"dim_Km ya está poblada con {count} registros. No se necesita carga.")
+        # 4. Conectar y cargar a SQLite
+        print("Conectando a la base de datos...")
+        conn = sqlite3.connect(ruta_db)
+        cursor = conn.cursor()
 
-except Exception as e:
-    print(f"Error al cargar dim_Km: {e}")
-    conn.rollback()
-finally:
-    conn.close()
+        cursor.execute("SELECT COUNT(*) FROM dim_Km")
+        count = cursor.fetchone()[0]
+        
+        if count == 0:
+            callback(f"Tabla dim_Km vacía. Cargando {len(df_final)} registros...")
+            df_final.to_sql("dim_Km", conn, if_exists="append", index=False)
+            conn.commit()
+            callback(f"Éxito: Se cargaron {len(df_final)} registros en dim_Km.")
+        else:
+            callback(f"dim_Km ya está poblada con {count} registros. No se necesita carga.")
+
+    except Exception as e:
+        callback(f"Error al cargar dim_Km: {e}")
+        if 'conn' in locals():
+            conn.rollback()
+        raise
+    finally:
+        if 'conn' in locals():
+            conn.close()

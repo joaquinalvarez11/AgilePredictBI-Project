@@ -1,22 +1,5 @@
 import sqlite3
-import os
-import sys
-
-# 1. Añadir el directorio raíz del proyecto al path
-current_dir = os.path.dirname(__file__)
-# Subimos TRES niveles (desde /proceso_db/scripts/dim/ hasta el raíz)
-project_root = os.path.abspath(os.path.join(current_dir, '..', '..', '..'))
-sys.path.append(project_root)
-
-# 2. Importar el gestor de configuración
 from config_manager import obtener_ruta
-
-try:
-    # 3. Obtener la ruta desde config.json
-    ruta_db = obtener_ruta("ruta_database")
-except Exception as e:
-    print(f"Error al cargar ruta_database desde config_manager: {e}")
-    sys.exit(1)
 
 # --- MAPAS CON JERARQUÍA ---
 
@@ -196,160 +179,169 @@ map_consequence_type = {
     2: "Sin daños"
 }
 
-# ==========================================================
-# --- CONECTAR Y CARGAR TODAS LAS DIMENSIONES ---
-# ==========================================================
-
-try:
-    conn = sqlite3.connect(ruta_db)
-    cursor = conn.cursor()
-    cursor.execute("PRAGMA foreign_keys = ON;")
-
+def run(callback):
+    """
+    Carga todas las dimensiones en la base de datos.
+    Recibe un callback para enviar mensajes de log.
+    """
     try:
-        print("\n--- Poblando Jerarquías de Vehículos y Tráfico ---")
-        print("Poblando Nivel 1: dim_VehicleType...")
-        cursor.executemany("INSERT OR IGNORE INTO dim_VehicleType (idVehicleType, VehicleType) VALUES (?, ?)", 
-                           map_vehicle_type.items())
-    except Exception as e:
-        print(f"ERROR al poblar dim_VehicleType: {e}")
-        raise # Detener el script si la jerarquía base falla
+        ruta_db = obtener_ruta("ruta_database")
+        print(f"Conectando a la base de datos en: {ruta_db}")
+        conn = sqlite3.connect(ruta_db)
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA foreign_keys = ON;")
 
-    try:
-        print("Poblando Nivel 2: dim_Category...")
-        cursor.executemany("INSERT OR IGNORE INTO dim_Category (idCategory, CategoryName, idVehicleType) VALUES (?, ?, ?)", 
-                           map_category)
-    except Exception as e:
-        print(f"ERROR al poblar dim_Category: {e}")
-        raise # Detener el script si la jerarquía base falla
-    
-    try:
-        print("Poblando Nivel 3: dim_VehicleTypeValue...")
-        cursor.executemany("INSERT OR IGNORE INTO dim_VehicleTypeValue (idVehicleTypeValue, VehicleTypeName, idCategory) VALUES (?, ?, ?)", 
-                           map_vehicle_type_value)
-    except Exception as e:
-        print(f"ERROR al poblar dim_VehicleTypeValue: {e}")
-        raise # Detener el script si la jerarquía base falla
+        # ==========================================================
+        # --- CONECTAR Y CARGAR TODAS LAS DIMENSIONES ---
+        # ==========================================================
 
-    print("\n--- Poblando Dimensiones de Tráfico ---")
+        try:
+            callback("\n--- Poblando Jerarquías de Vehículos y Tráfico ---")
+            callback("Poblando Nivel 1: dim_VehicleType...")
+            cursor.executemany("INSERT OR IGNORE INTO dim_VehicleType (idVehicleType, VehicleType) VALUES (?, ?)", 
+                            map_vehicle_type.items())
+        except Exception as e:
+            callback(f"ERROR al poblar dim_VehicleType: {e}")
+            raise # Detener el script si la jerarquía base falla
 
-    try:
-        print("Poblando dim_Plaza...")
-        cursor.executemany("INSERT OR IGNORE INTO dim_Plaza (idPlaza, PlazaName) VALUES (?, ?)", map_plaza.items())
-    except Exception as e:
-        print(f"ERROR al poblar dim_Plaza: {e}")
-
-    try:
-        print("Poblando dim_Direction...")
-        cursor.executemany("INSERT OR IGNORE INTO dim_Direction (idDirection, DirectionName) VALUES (?, ?)", map_direction.items())
-    except Exception as e:
-        print(f"ERROR al poblar dim_Direction: {e}")
-
-    print("\n--- Poblando Dimensiones de Accidentes (Ficha 0) ---")
-    
-    try:
-        print("Poblando dim_AccidentType...")
-        cursor.executemany("INSERT OR IGNORE INTO dim_AccidentType (idAccidentType, AccidentTypeName) VALUES (?, ?)", map_accident_type.items())
-    except Exception as e:
-        print(f"ERROR al poblar dim_AccidentType: {e}")
-
-    try:
-        print("Poblando dim_RelativeLocation...")
-        cursor.executemany("INSERT OR IGNORE INTO dim_RelativeLocation (idRelativeLocation, RelativeLocationName) VALUES (?, ?)", map_relative_location.items())
-    except Exception as e:
-        print(f"ERROR al poblar dim_RelativeLocation: {e}")
-
-    try:
-        print("Poblando dim_SurfaceCondition...")
-        cursor.executemany("INSERT OR IGNORE INTO dim_SurfaceCondition (idSurfaceCondition, SurfaceConditionName) VALUES (?, ?)", map_surface_condition.items())
-    except Exception as e:
-        print(f"ERROR al poblar dim_SurfaceCondition: {e}")
-    
-    try:
-        print("Poblando dim_Weather...")
-        cursor.executemany("INSERT OR IGNORE INTO dim_Weather (idWeather, WeatherName) VALUES (?, ?)", map_weather.items())
-    except Exception as e:
-        print(f"ERROR al poblar dim_Weather: {e}")
-
-    try:
-        print("Poblando dim_Luminosity...")
-        cursor.executemany("INSERT OR IGNORE INTO dim_Luminosity (idLuminosity, LuminosityName) VALUES (?, ?)", map_luminosity.items())
-    except Exception as e:
-        print(f"ERROR al poblar dim_Luminosity: {e}")
-
-    try:
-        print("Poblando dim_ArtificialLight...")
-        cursor.executemany("INSERT OR IGNORE INTO dim_ArtificialLight (idArtificialLight, ArtificialLightCondition) VALUES (?, ?)", map_artificial_light.items())
-    except Exception as e:
-        print(f"ERROR al poblar dim_ArtificialLight: {e}")
-
-    try:
-        print("Poblando dim_Lane...")
-        cursor.executemany("INSERT OR IGNORE INTO dim_Lane (LaneValue, LaneName) VALUES (?, ?)", map_lanes.items())
-    except Exception as e:
-        print(f"ERROR al poblar dim_Lane: {e}")
-
-    try:
-        print("Poblando dim_Environment...")
-        cursor.executemany("INSERT OR IGNORE INTO dim_Environment (EnvironmentCondition, EnvironmentValue, EnvironmentValueName) VALUES (?, ?, ?)", map_environment)
-    except Exception as e:
-        print(f"ERROR al poblar dim_Environment: {e}")
-
-    try:
-        print("Poblando dim_Response...")
-        cursor.executemany("INSERT OR IGNORE INTO dim_Response (ResponseType, ResponseValue, ResponseValueName) VALUES (?, ?, ?)", map_response)
-    except Exception as e:
-        print(f"ERROR al poblar dim_Response: {e}")
-
-    try:
-        print("Poblando dim_ProbableCause...")
-        cursor.executemany("INSERT OR IGNORE INTO dim_ProbableCause (ProbableCauseType, CauseValue, CauseValueName) VALUES (?, ?, ?)", map_probable_cause)
-    except Exception as e:
-        print(f"ERROR al poblar dim_ProbableCause: {e}")
-
-    try:
-        print("Poblando dim_Consequence...")
-        cursor.executemany("INSERT OR IGNORE INTO dim_Consequence (ConsequenceType) VALUES (?)", [(c,) for c in map_consequence])
-    except Exception as e:
-        print(f"ERROR al poblar dim_Consequence: {e}")
-
-    try:
-        print("Poblando dim_Affected...")
-        cursor.executemany("INSERT OR IGNORE INTO dim_Affected (AffectedType) VALUES (?)", [(a,) for a in map_affected])
-    except Exception as e:
-        print(f"ERROR al poblar dim_Affected: {e}")
-
-    try:
-        print("Poblando dim_Section...")
-        cursor.executemany("INSERT OR IGNORE INTO dim_Section (idSection, SectionName) VALUES (?, ?)", map_section.items())
-    except Exception as e:
-        print(f"ERROR al poblar dim_Section: {e}")
-
-    print("\n--- Poblando Dimensiones de Vehículos (Ficha 1) ---")
-
-    try:
-        print("Poblando dim_ServiceType...")
-        cursor.executemany("INSERT OR IGNORE INTO dim_ServiceType (idServiceType, ServiceName) VALUES (?, ?)", map_service_type.items())
-    except Exception as e:
-        print(f"ERROR al poblar dim_ServiceType: {e}")
-
-    try:
-        print("Poblando dim_ManeuverType...")
-        cursor.executemany("INSERT OR IGNORE INTO dim_ManeuverType (idManeuverType, ManeuverType) VALUES (?, ?)", map_maneuver_type.items())
-    except Exception as e:
-        print(f"ERROR al poblar dim_ManeuverType: {e}")
-
-    try:
-        print("Poblando dim_ConsequenceType...")
-        cursor.executemany("INSERT OR IGNORE INTO dim_ConsequenceType (idConsequenceType, ConsequenceType) VALUES (?, ?)", map_consequence_type.items())
-    except Exception as e:
-        print(f"ERROR al poblar dim_ConsequenceType: {e}")
+        try:
+            callback("Poblando Nivel 2: dim_Category...")
+            cursor.executemany("INSERT OR IGNORE INTO dim_Category (idCategory, CategoryName, idVehicleType) VALUES (?, ?, ?)", 
+                            map_category)
+        except Exception as e:
+            callback(f"ERROR al poblar dim_Category: {e}")
+            raise # Detener el script si la jerarquía base falla
         
-    conn.commit()
-    print("\nTodas las dimensiones han sido pobladas exitosamente.")
+        try:
+            callback("Poblando Nivel 3: dim_VehicleTypeValue...")
+            cursor.executemany("INSERT OR IGNORE INTO dim_VehicleTypeValue (idVehicleTypeValue, VehicleTypeName, idCategory) VALUES (?, ?, ?)", 
+                            map_vehicle_type_value)
+        except Exception as e:
+            callback(f"ERROR al poblar dim_VehicleTypeValue: {e}")
+            raise # Detener el script si la jerarquía base falla
 
-except Exception as e:
-    print(f"Error al poblar dimensiones: {e}")
-    conn.rollback()
-finally:
-    if conn:
-        conn.close()
+        callback("\n--- Poblando Dimensiones de Tráfico ---")
+
+        try:
+            callback("Poblando dim_Plaza...")
+            cursor.executemany("INSERT OR IGNORE INTO dim_Plaza (idPlaza, PlazaName) VALUES (?, ?)", map_plaza.items())
+        except Exception as e:
+            callback(f"ERROR al poblar dim_Plaza: {e}")
+
+        try:
+            callback("Poblando dim_Direction...")
+            cursor.executemany("INSERT OR IGNORE INTO dim_Direction (idDirection, DirectionName) VALUES (?, ?)", map_direction.items())
+        except Exception as e:
+            callback(f"ERROR al poblar dim_Direction: {e}")
+
+        callback("\n--- Poblando Dimensiones de Accidentes (Ficha 0) ---")
+        
+        try:
+            callback("Poblando dim_AccidentType...")
+            cursor.executemany("INSERT OR IGNORE INTO dim_AccidentType (idAccidentType, AccidentTypeName) VALUES (?, ?)", map_accident_type.items())
+        except Exception as e:
+            callback(f"ERROR al poblar dim_AccidentType: {e}")
+
+        try:
+            callback("Poblando dim_RelativeLocation...")
+            cursor.executemany("INSERT OR IGNORE INTO dim_RelativeLocation (idRelativeLocation, RelativeLocationName) VALUES (?, ?)", map_relative_location.items())
+        except Exception as e:
+            callback(f"ERROR al poblar dim_RelativeLocation: {e}")
+
+        try:
+            callback("Poblando dim_SurfaceCondition...")
+            cursor.executemany("INSERT OR IGNORE INTO dim_SurfaceCondition (idSurfaceCondition, SurfaceConditionName) VALUES (?, ?)", map_surface_condition.items())
+        except Exception as e:
+            callback(f"ERROR al poblar dim_SurfaceCondition: {e}")
+        
+        try:
+            callback("Poblando dim_Weather...")
+            cursor.executemany("INSERT OR IGNORE INTO dim_Weather (idWeather, WeatherName) VALUES (?, ?)", map_weather.items())
+        except Exception as e:
+            callback(f"ERROR al poblar dim_Weather: {e}")
+
+        try:
+            callback("Poblando dim_Luminosity...")
+            cursor.executemany("INSERT OR IGNORE INTO dim_Luminosity (idLuminosity, LuminosityName) VALUES (?, ?)", map_luminosity.items())
+        except Exception as e:
+            callback(f"ERROR al poblar dim_Luminosity: {e}")
+
+        try:
+            callback("Poblando dim_ArtificialLight...")
+            cursor.executemany("INSERT OR IGNORE INTO dim_ArtificialLight (idArtificialLight, ArtificialLightCondition) VALUES (?, ?)", map_artificial_light.items())
+        except Exception as e:
+            callback(f"ERROR al poblar dim_ArtificialLight: {e}")
+
+        try:
+            callback("Poblando dim_Lane...")
+            cursor.executemany("INSERT OR IGNORE INTO dim_Lane (LaneValue, LaneName) VALUES (?, ?)", map_lanes.items())
+        except Exception as e:
+            callback(f"ERROR al poblar dim_Lane: {e}")
+
+        try:
+            callback("Poblando dim_Environment...")
+            cursor.executemany("INSERT OR IGNORE INTO dim_Environment (EnvironmentCondition, EnvironmentValue, EnvironmentValueName) VALUES (?, ?, ?)", map_environment)
+        except Exception as e:
+            callback(f"ERROR al poblar dim_Environment: {e}")
+
+        try:
+            callback("Poblando dim_Response...")
+            cursor.executemany("INSERT OR IGNORE INTO dim_Response (ResponseType, ResponseValue, ResponseValueName) VALUES (?, ?, ?)", map_response)
+        except Exception as e:
+            callback(f"ERROR al poblar dim_Response: {e}")
+
+        try:
+            callback("Poblando dim_ProbableCause...")
+            cursor.executemany("INSERT OR IGNORE INTO dim_ProbableCause (ProbableCauseType, CauseValue, CauseValueName) VALUES (?, ?, ?)", map_probable_cause)
+        except Exception as e:
+            callback(f"ERROR al poblar dim_ProbableCause: {e}")
+
+        try:
+            callback("Poblando dim_Consequence...")
+            cursor.executemany("INSERT OR IGNORE INTO dim_Consequence (ConsequenceType) VALUES (?)", [(c,) for c in map_consequence])
+        except Exception as e:
+            callback(f"ERROR al poblar dim_Consequence: {e}")
+
+        try:
+            callback("Poblando dim_Affected...")
+            cursor.executemany("INSERT OR IGNORE INTO dim_Affected (AffectedType) VALUES (?)", [(a,) for a in map_affected])
+        except Exception as e:
+            callback(f"ERROR al poblar dim_Affected: {e}")
+
+        try:
+            callback("Poblando dim_Section...")
+            cursor.executemany("INSERT OR IGNORE INTO dim_Section (idSection, SectionName) VALUES (?, ?)", map_section.items())
+        except Exception as e:
+            callback(f"ERROR al poblar dim_Section: {e}")
+
+        callback("\n--- Poblando Dimensiones de Vehículos (Ficha 1) ---")
+
+        try:
+            callback("Poblando dim_ServiceType...")
+            cursor.executemany("INSERT OR IGNORE INTO dim_ServiceType (idServiceType, ServiceName) VALUES (?, ?)", map_service_type.items())
+        except Exception as e:
+            callback(f"ERROR al poblar dim_ServiceType: {e}")
+
+        try:
+            callback("Poblando dim_ManeuverType...")
+            cursor.executemany("INSERT OR IGNORE INTO dim_ManeuverType (idManeuverType, ManeuverType) VALUES (?, ?)", map_maneuver_type.items())
+        except Exception as e:
+            callback(f"ERROR al poblar dim_ManeuverType: {e}")
+
+        try:
+            callback("Poblando dim_ConsequenceType...")
+            cursor.executemany("INSERT OR IGNORE INTO dim_ConsequenceType (idConsequenceType, ConsequenceType) VALUES (?, ?)", map_consequence_type.items())
+        except Exception as e:
+            callback(f"ERROR al poblar dim_ConsequenceType: {e}")
+            
+        conn.commit()
+        callback("\nTodas las dimensiones han sido pobladas exitosamente.")
+
+    except Exception as e:
+        callback(f"Error al poblar dimensiones: {e}")
+        if 'conn' in locals():
+            conn.rollback()
+        raise
+    finally:
+        if 'conn' in locals():
+            conn.close()

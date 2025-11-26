@@ -11,7 +11,7 @@ class AgilePredictApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("AgilePredictBI - Asistente Predictivo")
-        self.geometry("1200x700")
+        self.centrar_ventana(1200, 700)
         self.resizable(False, False)
 
         # Contenedor principal para todas las vistas
@@ -39,6 +39,19 @@ class AgilePredictApp(tk.Tk):
             frame.grid(row=0, column=0, sticky="nsew")
 
         self.show_frame(VistaBienvenida)
+    
+    # Método para centrar la ventana
+    def centrar_ventana(self, ancho=1200, alto=700):
+        # Obtener dimensiones de la pantalla
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+
+        # Calcular coordenadas
+        x = (screen_width // 2) - (ancho // 2)
+        y = (screen_height // 2) - (alto // 2)
+
+        # Aplicar geometría
+        self.geometry(f"{ancho}x{alto}+{x}+{y}")
 
     def show_frame(self, cont):
         """Muestra un frame específico basado en su clase."""
