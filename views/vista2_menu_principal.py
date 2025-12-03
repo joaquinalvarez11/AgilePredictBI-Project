@@ -2,13 +2,13 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import os
 from config_manager import obtener_ruta, cargar_ruta_base, guardar_ruta_base
-# from utils.backup_manager import BackupManager
+from utils.backup_manager import BackupManager
 
 class VistaMenuPrincipal(tk.Frame):
     def __init__(self, parent, controller):
         super().__init__(parent)
         self.controller = controller
-        # self.backup_manager = BackupManager()
+        self.backup_manager = BackupManager()
 
         # --- Estilos ---
         self.configure(bg="white") # Fondo blanco base
@@ -142,33 +142,32 @@ class VistaMenuPrincipal(tk.Frame):
             messagebox.showerror("Error", "Carpeta principal no definida o no existe.\nDebe definir una carpeta principal válida antes de respaldar.")
             return
         
-        # Validar si existen
-        rutas = {
-            "CSV limpios": obtener_ruta("ruta_csv_limpio"),
-            "Predicciones": obtener_ruta("ruta_predicciones"),
-            "Base de datos": obtener_ruta("ruta_database")
-        }
-
-        existentes = []
-        for nombre, ruta in rutas.items():
-            # Base de datos
-            if os.path.isfile(ruta):
-                existentes.append(f"{nombre}: {ruta}")
-            # CSV limpios o Predicciones
-            elif os.path.isdir(ruta):
-                archivos = os.listdir(ruta)
-                if archivos:
-                    arch_msg = "archivo" if len(archivos) == 1 else "archivos"
-                    existentes.append(f"{nombre}: {ruta} ({len(archivos)} {arch_msg})")
-
-        if not existentes:
-            messagebox.showerror("Error", "No se encontró ningún archivo o carpeta para respaldar.\nDebe realizar al menos un proceso antes de respaldar.")
-            return
-        
         try:
-            # TODO: Registrar la aplicación para el acceso a OneDrive
-            # self.backup_manager.respaldar()
-            msg = "Respaldo completado en OneDrive.\n\nSe incluyeron:\n\n- " + "\n- ".join(existentes)
+            # Rutas a respaldar
+            rutas = {
+                "Excel Brutos": obtener_ruta("ruta_excel_bruto"),
+                "Excel Limpios": obtener_ruta("ruta_csv_limpio"),
+                "Predicciones": obtener_ruta("ruta_predicciones"),
+                "database": obtener_ruta("ruta_database")
+            }
+
+            # Filtrar las que existan
+            fuentes_validas = {nombre: ruta for nombre, ruta in rutas.items() if ruta}
+
+            if not fuentes_validas:
+                messagebox.showerror("Error", "No se encontró ningún archivo o carpeta para respaldar.\nDebe realizar al menos un proceso antes de respaldar.")
+                return
+            
+            carpeta_backup, respaldadas = self.backup_manager.subir_a_onedrive_local(fuentes_validas)
+
+            detalle = "\n".join([f"- {nombre}: {cantidad} archivos" for nombre, cantidad in respaldadas.items()])
+
+            msg = (
+                f"Respaldo completado en OneDrive.\n\n"
+                f"Carpeta: {carpeta_backup}\n\n"
+                f"Se incluyeron:\n\n{detalle}"
+            )
+            
             messagebox.showinfo("Respaldar", msg)
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo realizar el respaldo:\n{e}")
@@ -180,9 +179,11 @@ class VistaMenuPrincipal(tk.Frame):
             messagebox.showerror("Error", "Carpeta principal no definida o no existe.\nDebe definir una carpeta principal válida antes de recuperar.")
             return
         
-        try:
-            # TODO: Registrar la aplicación para el acceso a OneDrive
-            # self.backup_manager.recuperar("backup.zip.enc", destino=ruta_base)
+        carpeta_backup = filedialog.askdirectory(
+            initialdir=self.backup_manager.CARPETA_ONEDRIVE,
+            title="Seleccionar carpeta de respaldo en OneDrive"
+        )
+
+        if carpeta_backup:
+            self.backup_manager.descargar_de_onedrive_local(os.path.basename(carpeta_backup), ruta_base)
             messagebox.showinfo("Recuperar", f"Respaldo recuperado y extraído en la carpeta '{ruta_base}'.")
-        except Exception as e:
-            messagebox.showerror("Error", f"No se pudo recuperar el respaldo:\n{e}")
