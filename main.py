@@ -1,3 +1,4 @@
+import os, sys
 import tkinter as tk
 from views.vista1_bienvenida import VistaBienvenida
 from views.vista3_resultados import VistaResultados
@@ -13,6 +14,14 @@ class AgilePredictApp(tk.Tk):
         self.title("AgilePredictBI - Asistente Predictivo")
         self.centrar_ventana(1200, 700)
         self.resizable(False, False)
+        
+        if getattr(sys, 'frozen', False):
+            base_path = sys._MEIPASS
+        else:
+            base_path = os.path.dirname(__file__)
+        
+        icon_path = os.path.join(base_path, "assets", "agilepredictbi_Logo.ico")
+        self.iconbitmap(icon_path)
 
         # Contenedor principal para todas las vistas
         container = tk.Frame(self)
