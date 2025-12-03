@@ -41,7 +41,11 @@ class BackupManager():
                 continue
             
             if os.path.isdir(ruta):
-                tiene_archivos = any(files for _, _, files in os.walk(ruta))
+                tiene_archivos = any(
+                    f for _, _, files in os.walk(ruta)
+                    for f in files
+                    if not (f.startswith("~$") or f.startswith(".~lock"))
+                )
                 
                 if not tiene_archivos:
                     print(f"[ADVERTENCIA] La carpeta '{ruta}' está vacía, se omite el respaldo.")
@@ -52,6 +56,8 @@ class BackupManager():
                 count = 0
                 for root, dirs, files in os.walk(destino_base):
                     for f in files:
+                        if f.startswith("~$") or f.startswith(".~lock"):
+                            continue
                         hay_archivos = True
                         count += 1
                 respaldadas[nombre] = count
