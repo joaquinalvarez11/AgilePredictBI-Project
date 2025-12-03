@@ -69,17 +69,17 @@ class VistaMenuPrincipal(tk.Frame):
         
         # TODO: Registro de la aplicación
         # --- Frame de OneDrive ---
-        # onedrive_frame = ttk.Frame(top_frame)
-        # onedrive_frame.grid(row=0, column=1, sticky="e", padx=10)
+        onedrive_frame = ttk.Frame(top_frame)
+        onedrive_frame.grid(row=0, column=1, sticky="e", padx=10)
 
-        # lbl_onedrive = ttk.Label(onedrive_frame, text="Gestión en OneDrive:")
-        # lbl_onedrive.pack(anchor="w")
+        lbl_onedrive = ttk.Label(onedrive_frame, text="Gestión en OneDrive:")
+        lbl_onedrive.pack(anchor="w")
 
-        # btn_backup = ttk.Button(onedrive_frame, text="☁️ Respaldar", width=16, command=self.respaldar_archivos)
-        # btn_backup.pack(side="left", padx=5)
+        btn_backup = ttk.Button(onedrive_frame, text="☁️ Respaldar", width=16, command=self.respaldar_archivos)
+        btn_backup.pack(side="left", padx=5)
 
-        # btn_recuperar = ttk.Button(onedrive_frame, text="📥 Recuperar", width=16, command=self.recuperar_archivos)
-        # btn_recuperar.pack(side="left", padx=5)
+        btn_recuperar = ttk.Button(onedrive_frame, text="📥 Recuperar", width=16, command=self.recuperar_archivos)
+        btn_recuperar.pack(side="left", padx=5)
 
         # --- Contenido ---
         self.ESPACIO_RESERVADO = "\n\n"
