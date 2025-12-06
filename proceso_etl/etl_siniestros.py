@@ -1,16 +1,14 @@
 import pandas as pd
 import numpy as np
+import re
 import os
 import glob
-from datetime import datetime, date, time
 from pathlib import Path
+from datetime import datetime, date, time
 import csv
 from config_manager import obtener_ruta
-import re
-
 
 class ETLSiniestralidad():
-    # Mapeo de columnas en atributo de clase
     __RENAMINGS = {
         "Column1": "Correlativo",
         "Column2": "ID Contrato",
@@ -80,11 +78,15 @@ class ETLSiniestralidad():
         "Column66": "Daños Ocasionados a la Infraestructura vial",
         "Column67": "Descripción del Accidente",
     }
+    
+    __MESES_TEXTO = {
+        'ENERO': '01', 'FEBRERO': '02', 'MARZO': '03', 'ABRIL': '04', 'MAYO': '05', 'JUNIO': '06',
+        'JULIO': '07', 'AGOSTO': '08', 'SEPTIEMBRE': '09', 'OCTUBRE': '10', 'NOVIEMBRE': '11', 'DICIEMBRE': '12'
+    }
 
     # -----------------------------------------
     # MÉTODOS PÚBLICOS
     # -----------------------------------------
-
     def __init__(self):
         """Inicializa las rutas usando el config_manager."""
         # Se obtienen las rutas del archivo de configuración centralizado
@@ -105,11 +107,16 @@ class ETLSiniestralidad():
             self.__log(f"Iniciando procesamiento para: {ruta_archivo_excel}")
 
             nombre_base = Path(ruta_archivo_excel).stem
+
+            # === LISTA DE OBSERVACIONES ===
+            obs_calidad = []
+
             # Construir la ruta de salida completa
             anio_str = self.__extraer_anio_de_ruta(ruta_archivo_excel)
             if not anio_str:
-                self.__log(f"ADVERTENCIA: No se pudo determinar año para '{nombre_base}'. Se guardará en raíz de 'Siniestralidad/Ficha 0'.")
+                obs_calidad.append("No se determinó año para '{nombre_base}'. Se guardará en raíz.")
                 anio_str = ""
+
             ruta_salida_anio = os.path.join(self.__ruta_limpia_base, anio_str)
             os.makedirs(ruta_salida_anio, exist_ok=True)
             ruta_csv_salida = os.path.join(ruta_salida_anio, f"{nombre_base}_Limpio.csv")
@@ -122,16 +129,24 @@ class ETLSiniestralidad():
 
             try:
                 # Llamada a la lógica principal de transformación
-                df_transformado = self.__transformar_excel(ruta_archivo_excel)
+                df_transformado = self.__transformar_excel(ruta_archivo_excel, obs_calidad, anio_carpeta=anio_str)
 
                 # Verificar si la transformación produjo un DataFrame válido
                 if df_transformado is None or df_transformado.empty:
-                    self.__log(f"ADVERTENCIA: La transformación de '{nombre_base}' no produjo datos válidos.")
+                    self.__log(f"ADVERTENCIA: '{nombre_base}' no produjo datos válidos.")
                     # Consideramos esto un éxito parcial (no error), pero no guardamos nada.
                     return True
 
                 # Guardar el resultado si la transformación fue exitosa
                 self.__guardar_csv(df_transformado, ruta_csv_salida)
+                
+                # --- IMPRIMIR REPORTE AL FINAL ---
+                if obs_calidad:
+                    self.__log(f"--- REPORTE CALIDAD: {nombre_base} ---")
+                    for o in obs_calidad:
+                        self.__log(f"   • {o}")
+                    self.__log("------------------------------------------")
+                
                 return True # Indicar éxito al controlador
 
             except Exception as e:
@@ -144,78 +159,114 @@ class ETLSiniestralidad():
     # MÉTODOS PRIVADOS - Lógica del ETL
     # -----------------------------------------
     def __extraer_anio_de_ruta(self, ruta_archivo):
-        """Intenta extraer el año (carpeta 'YYYY') del path del archivo."""
+        """ Recuperado: Extrae el año de la carpeta contenedora """
         try:
             parts = Path(ruta_archivo).parts
             for part in reversed(parts[:-1]):
                 if len(part) == 4 and part.isdigit():
                     return part
-        except Exception as e:
-            self.__log(f"No se pudo extraer año de la ruta {ruta_archivo}: {e}")
+        except: pass
         return None
+    
+    def __extraer_info_flexible(self, nombre_archivo, anio_carpeta):
+        nombre_clean = nombre_archivo.upper()
+        
+        # 1. Intentar buscar mes en texto (ENERO, FEBRERO...)
+        mes_num = "00"
+        for mes_nom, num_str in self.__MESES_TEXTO.items():
+            if mes_nom in nombre_clean:
+                mes_num = num_str
+                break
+        
+        # 2. Intentar buscar año 4 dígitos en nombre
+        match_anio = re.search(r'(20\d{2})', nombre_clean)
+        anio_final = match_anio.group(1) if match_anio else anio_carpeta
+        
+        if not anio_final: anio_final = "1900"
+        
+        prefijo = f"{anio_final}{mes_num}"
+        return prefijo, anio_final
 
-    def __transformar_excel(self, ruta_excel):
+    def __transformar_excel(self, ruta_excel, obs_calidad, anio_carpeta=""):
         """Orquesta el proceso de transformación para un archivo Excel."""
         self.__log(f"Transformando archivo: {Path(ruta_excel).name}")
         # 1. Leer y encontrar encabezado
         df, _ = self.__read_raw_sheet(ruta_excel)
         if df is None:
             # Si no se puede leer, no podemos continuar.
-            self.__log("Error: No se pudo leer la hoja o encontrar el encabezado 'Correlativo'.")
+            obs_calidad.append("No se encontró encabezado 'Correlativo'.")
             return None # Devolver None para indicar fallo controlado
 
         # Se usará esta fecha para TODOS los IDs del archivo, unificando el criterio
         nombre_archivo = Path(ruta_excel).name
-        match_texto = re.search(r"(\d{2})\s+\w+\s+(\d{4})", nombre_archivo) # Ej: "06 Junio 2021"
-        match_num = re.search(r"(\d{4})[-_]?(\d{2})", nombre_archivo) # Ej: "2021-06" o "202106"
-
-        prefijo_fecha_archivo = "000000"
-        anio_archivo = "1900" # Default por si no se encuentra
-
-        if match_texto:
-            mes = match_texto.group(1)
-            anio_archivo = match_texto.group(2)
-            prefijo_fecha_archivo = f"{anio_archivo}{mes}"
-        elif match_num:
-            anio_archivo = match_num.group(1)
-            prefijo_fecha_archivo = f"{anio_archivo}{match_num.group(2)}"
-        else:
-            self.__log(f"ADVERTENCIA: No se pudo extraer AñoMes del nombre '{nombre_archivo}'. Se usará '000000' para IDs y '1900' para fechas.")
-
-        self.__log(f"Se usará el prefijo '{prefijo_fecha_archivo}' para IDs y el año '{anio_archivo}' para fechas sin año.")
+        prefijo_fecha_archivo, anio_archivo = self.__extraer_info_flexible(nombre_archivo, anio_carpeta)
+        
+        if prefijo_fecha_archivo.endswith("00"):
+            obs_calidad.append(f"Advertencia: No se detectó MES en el nombre del archivo. IDs usarán mes '00'.")
 
         # 2. Limpieza inicial
         df = df.rename(columns=self.__RENAMINGS)
-        # === Pasar prefijos a la limpieza inicial ===
-        df = self.__limpieza_inicial(df, prefijo_fecha_archivo, anio_archivo)
-        if df.empty:
-             self.__log("DataFrame vacío después de la limpieza inicial.")
+        df = self.__limpieza_inicial(df, prefijo_fecha_archivo, anio_archivo, obs_calidad)
+        
+        if df is None or df.empty:
              return None
 
         # 3. Unpivot y combinar
         df = self.__unpivot_y_combinar(df)
         if df.empty:
-             self.__log("DataFrame vacío después del unpivot y merge.")
              return None
 
         # 4. Imputar y expandir
         df = self.__imputar_y_expandir(df)
         if df.empty:
-             self.__log("DataFrame vacío después de imputar y expandir.")
              return None
 
         # 5. Pasos finales
         df = self.__pasos_finales(df)
         if df.empty:
-             self.__log("DataFrame vacío después de los pasos finales.")
              return None
 
         self.__log(f"Transformación completada exitosamente. {len(df)} filas generadas.")
         return df
 
-    def __limpieza_inicial(self, df, prefijo_fecha_para_id, anio_archivo):
+    def __limpieza_inicial(self, df, prefijo_fecha_para_id, anio_archivo, obs_calidad):
         """Realiza los primeros pasos de limpieza, formato y creación de ID."""
-        # === NUEVO: Detectar y corregir columnas 'Luminosidad' y 'Estado Atmosférico' invertidas ===
+        # 1. === LIMPIEZA CRÍTICA DE CORRELATIVO ===
+        df["Correlativo"] = pd.to_numeric(df["Correlativo"], errors='coerce')
+        
+        filas_antes = len(df)
+        # En lugar de solo dropna, exigimos que sea mayor a 0. Esto elimina NaNs, ceros y cualquier basura numérica.
+        df = df[df["Correlativo"] > 0]
+        filas_despues = len(df)
+        
+        self.__log(f"DEBUG: Filas antes: {filas_antes} | Filas después: {filas_despues} (Se borraron {filas_antes - filas_despues})")
+
+        diff = filas_antes - filas_despues
+        if diff > 0:
+            obs_calidad.append(f"Se eliminaron {diff} filas sin 'Correlativo' numérico válido (posibles filas fantasmas).")
+
+        if df.empty: return df
+
+        # 2. === SOLUCIÓN A DUPLICADOS ===
+        # Si existe el mismo correlativo repetido, nos quedamos con el primero.
+        columnas_clave = ["Correlativo"]
+        
+        if "Descripción del Accidente" in df.columns:
+            # Aseguramos que la descripción sea string y quitamos espacios extra para comparar bien
+            df["Descripción del Accidente"] = df["Descripción del Accidente"].astype(str).str.strip()
+            columnas_clave.append("Descripción del Accidente")
+
+        # Chequeo de duplicados
+        duplicados = df.duplicated(subset=columnas_clave, keep='first').sum()
+        
+        if duplicados > 0:
+            df = df.drop_duplicates(subset=columnas_clave, keep='first')
+            obs_calidad.append(f"Se eliminaron {duplicados} registros duplicados (Criterio: {columnas_clave}).")
+
+        # Conversión final del Correlativo
+        df["Correlativo"] = df["Correlativo"].astype('Int64')
+        
+        # === Detectar y corregir columnas 'Luminosidad' y 'Estado Atmosférico' invertidas ===
         try:
             if "Luminosidad" in df.columns and "Estado Atmosférico" in df.columns:
                 self.__log("Iniciando chequeo de columnas invertidas (Luminosidad/Estado Atmosférico)...")
@@ -233,28 +284,34 @@ class ETLSiniestralidad():
                 if invalid_lum_mask.any():
                     # Si hay CUALQUIER valor inválido (ej: 5, 6), asumimos que las columnas están cambiadas
                     invalid_samples = list(lum_values_numeric[invalid_lum_mask].unique())[:3] # Muestra hasta 3
-                    self.__log(f"ADVERTENCIA: Detectados valores inválidos para 'Luminosidad' (ej: {invalid_samples}).")
-                    self.__log(">>> Asumiendo columnas 'Luminosidad' y 'Estado Atmosférico' invertidas. Realizando SWAP.")
+                    obs_calidad.append(f"Columnas invertidas detectadas (Lum/Atm). Muestras inválidas en Lum: {invalid_samples}. Se realizó intercambio.")
                     
                     # Guardar temporalmente, hacer el swap
                     lum_temp_data = df["Luminosidad"].copy()
                     df["Luminosidad"] = df["Estado Atmosférico"]
                     df["Estado Atmosférico"] = lum_temp_data
-                else:
-                    self.__log("Chequeo de columnas invertidas OK. No se requiere swap.")
                     
         except Exception as e_swap:
-            self.__log(f"ERROR durante el chequeo de columnas invertidas: {e_swap}")
+            obs_calidad.append(f"Error chequeando columnas invertidas: {e_swap}")
         
+        # Limpieza Km/Hora
         self.__log("Iniciando limpieza y preparación de datos...")
         if "Km" in df.columns: df["Km"] = df["Km"].apply(self.__fix_km)
         if "Hora" in df.columns: df["Hora"] = df["Hora"].apply(self.__fix_time)
 
+        # Control de Filas Eliminadas por falta de Correlativo
+        filas_antes = len(df)
         df = df.dropna(subset=["Correlativo"])
         # Asegurarse que Correlativo no sea un string vacío después de quitar NaNs
         df = df[df["Correlativo"].astype(str).str.strip() != ""]
-        if df.empty: return df # Salir temprano si no hay datos válidos
+        filas_despues = len(df)
+
+        diff = filas_antes - filas_despues
+        if diff > 0:
+            obs_calidad.append(f"Se eliminaron {diff} filas sin 'Correlativo' válido.")
         
+        if df.empty: return df
+
         cols_to_drop = [c for c in df.columns if 'Column' in str(c)] + [
             "ID Contrato", "ID Tramo", "Administrador", "Nombre Administrador"
         ]
@@ -266,8 +323,13 @@ class ETLSiniestralidad():
         # Conversión de tipos
         df["Correlativo"] = pd.to_numeric(df["Correlativo"], errors='coerce').astype('Int64')
         # ===  Usar función robusta __fix_fecha ===
-        self.__log(f"Normalizando columna 'Fecha' usando el año default: {anio_archivo}")
+        self.__log(f"Normalizando columna 'Fecha' usando el año: {anio_archivo}")
+        
         df["Fecha"] = df["Fecha"].apply(self.__fix_fecha, anio_default=anio_archivo)
+        fechas_nulas = df["Fecha"].isna().sum()
+        if fechas_nulas > 0:
+            obs_calidad.append(f"Hay {fechas_nulas} filas con Fecha inválida o vacía (se intentó usar año default {anio_archivo}).")
+        
         for col in ["P6", "P4", "P2", "P1", "P3", "P5", "Tramo"]:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
@@ -329,7 +391,6 @@ class ETLSiniestralidad():
 
     def __pasos_finales(self, df):
         """Aplica los filtros finales y crea columnas derivadas."""
-        self.__log("Aplicando filtros y transformaciones finales...")
         if "Descripción del Accidente" in df.columns:
             cond_desc = df["Descripción del Accidente"].notnull() & (df["Descripción del Accidente"].astype(str).str.strip() != "")
             df = df[cond_desc].reset_index(drop=True)

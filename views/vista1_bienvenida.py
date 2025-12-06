@@ -71,7 +71,7 @@ class VistaBienvenida(ttk.Frame):
         ttk.Label(text_button_frame, text=texto_desc, style="Body.TLabel", justify="center", wraplength=700).pack(pady=5)
 
         # Botón con un poco más de presencia (Padding interno)
-        btn = ttk.Button(text_button_frame, text="Comenzar Sesión", style="Action.TButton", command=self.controller.show_menu_principal)
+        btn = ttk.Button(text_button_frame, text="Comenzar Sesión", style="Action.TButton", command=self.controller.show_login_view)
         btn.pack(pady=30, ipadx=20, ipady=5)
 
         # --- Barra Inferior ---

@@ -172,7 +172,7 @@ class VistaML(ttk.Frame):
             self.canvas_widget = canvas.get_tk_widget()
             self.canvas_widget.configure(bg="white")
             
-            # CORRECCIÓN AQUÍ: Usamos row=0, column=0 para que ocupe el mismo espacio que los logs
+            # Usamos row=0, column=0 para que ocupe el mismo espacio que los logs
             self.canvas_widget.grid(row=0, column=0, sticky="nsew")
 
             self.frame_logs.grid_remove()

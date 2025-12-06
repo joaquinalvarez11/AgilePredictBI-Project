@@ -1,6 +1,7 @@
 import os, sys
 import tkinter as tk
 from views.vista1_bienvenida import VistaBienvenida
+from views.vista_login import VistaLogin
 from views.vista3_resultados import VistaResultados
 from views.vista4_exportar import VistaExportar
 
@@ -35,8 +36,9 @@ class AgilePredictApp(tk.Tk):
 
         # Lista de las clases de vistas a usar
         list_of_pages = [
-            VistaBienvenida, 
-            VistaMenuPrincipal, 
+            VistaBienvenida,
+            VistaLogin,
+            VistaMenuPrincipal,
             VistaETL,
             VistaML,
             VistaExportar
@@ -67,7 +69,21 @@ class AgilePredictApp(tk.Tk):
         frame = self.frames[cont]
         frame.tkraise() # Trae el frame seleccionado al frente
 
+    def show_frame_by_name(self, name):
+        """Permite llamar a una vista usando su nombre como string (útil para lógica dinámica)"""
+        # Mapeo simple de strings a clases
+        mapping = {
+            "VistaBienvenida": VistaBienvenida,
+            "VistaLogin": VistaLogin,
+            "VistaMenuPrincipal": VistaMenuPrincipal
+        }
+        if name in mapping:
+            self.show_frame(mapping[name])
+
     # Métodos de navegación llamados desde los botones de las vistas
+    def show_login_view(self):
+        self.show_frame(VistaLogin)
+    
     def show_menu_principal(self):
         self.show_frame(VistaMenuPrincipal)
 

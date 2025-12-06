@@ -1,12 +1,11 @@
 import pandas as pd
 import re
-import os # TODO: Reemplazar librería "os" por "gestion_archivos.py" cuando tenga funcionalidad
+import os
 from pathlib import Path
 from datetime import datetime
 from config_manager import obtener_ruta
 
 class ETLTrafico():
-    # TODO: Mover este diccionario en otro modulo
     # Diccionario constante para traducción del nombre de cada hoja
     __CATEGORIA_VEHICULO = {
         '1 MOTO': 'Moto',
@@ -16,6 +15,11 @@ class ETLTrafico():
         '5 CAMION +2 EJES': 'Camión +2 Ejes',
         '6 BUS +2 EJES': 'Bus +2 Ejes',
         '12 SOBREDIMEN.': 'Sobredimensionado'
+    }
+
+    __MESES_TEXTO = {
+        'ENERO': 1, 'FEBRERO': 2, 'MARZO': 3, 'ABRIL': 4, 'MAYO': 5, 'JUNIO': 6,
+        'JULIO': 7, 'AGOSTO': 8, 'SEPTIEMBRE': 9, 'OCTUBRE': 10, 'NOVIEMBRE': 11, 'DICIEMBRE': 12
     }
 
     def __init__(self):
@@ -37,10 +41,22 @@ class ETLTrafico():
         """
         self.__log(f"Iniciando procesamiento para: {ruta_archivo_excel}")
         nombre_base = Path(ruta_archivo_excel).stem
+
+        # Lista para recolectar hallazgos de calidad en este archivo
+        observaciones_calidad = []
+        
+        # 1. Intentar sacar año de la carpeta (Fuente más confiable)
         anio_str = self.__extraer_anio_de_ruta(ruta_archivo_excel)
+        
+        # 2. Si no, intentar del nombre
         if not anio_str:
-            self.__log(f"ADVERTENCIA: No se pudo determinar el año para '{nombre_base}'. Se guardará en la raíz de 'Trafico'.")
-            anio_str = "" # Guardar en la raíz de __ruta_limpia_base si no se encuentra año
+            anio_nombre, _ = self.__extraer_fecha_flexible(nombre_base)
+            if anio_nombre: anio_str = str(anio_nombre)
+
+        if not anio_str:
+            observaciones_calidad.append("No se pudo determinar año. Se usará raíz.")
+            anio_str = ""
+            
         ruta_salida_anio = os.path.join(self.__ruta_limpia_base, anio_str)
         os.makedirs(ruta_salida_anio, exist_ok=True)
         ruta_csv_salida = os.path.join(ruta_salida_anio, f"{nombre_base}_Limpio.csv")
@@ -55,13 +71,22 @@ class ETLTrafico():
             return True
 
         try:
-            df_transformado = self.__transformar_excel(ruta_archivo_excel)
+            # Pasamos el año de la carpeta como respaldo
+            df_transformado = self.__transformar_excel(ruta_archivo_excel, observaciones_calidad, anio_carpeta=anio_str)
             if df_transformado.empty:
                  self.__log(f"La transformación de '{nombre_base}' no produjo datos. Saltando guardado.")
                  return True
 
             df_transformado.to_csv(ruta_csv_salida, index=False, encoding='utf-8-sig')
             self.__log(f"Éxito: '{nombre_base}' procesado ({len(df_transformado)} filas). Guardado en '{anio_str}'.")
+            
+            # --- REPORTE DE CALIDAD ---
+            if observaciones_calidad:
+                self.__log(f"--- REPORTE CALIDAD: {nombre_base} ---")
+                for obs in observaciones_calidad:
+                    self.__log(f"   • {obs}")
+                self.__log("------------------------------------------")
+            
             return True
         except Exception as e:
             self.__log(f"ERROR CRÍTICO procesando '{nombre_base}': {e}")
@@ -103,15 +128,37 @@ class ETLTrafico():
             self.__log(f"No se pudo extraer año de la ruta {ruta_archivo}: {e}")
         return None
 
-    def __extraer_fecha_desde_nombre(self, nombre_archivo):
-        # Separar estructura por año y mes
-        partes = re.search(r'(\d{4})-(\d{2})', nombre_archivo)
-        if partes:
-            anio = int(partes.group(1))
-            mes = int(partes.group(2))
-            return anio, mes
+    def __extraer_fecha_flexible(self, nombre_archivo):
+        nombre_limpio = nombre_archivo.upper().replace('_', ' ').replace('-', ' ').replace('.', ' ')
         
-        self.__log(f"ADVERTENCIA: No se pudo extraer año/mes desde el nombre '{nombre_archivo}'")
+        # 1. Buscar patrón numérico clásico: YYYY MM o MM YYYY
+        match_num = re.search(r'(\d{4})\s+(\d{2})|(\d{2})\s+(\d{4})', nombre_limpio)
+        if match_num:
+            # Determinar cual es año (mayor a 1900) y cual mes (1-12)
+            nums = [int(n) for n in match_num.groups() if n]
+            anio = max(nums)
+            mes = min(nums)
+            if 1990 < anio < 2050 and 1 <= mes <= 12:
+                return anio, mes
+
+        # 2. Buscar Texto (Enero 2019, 2019 Enero)
+        anio_encontrado = None
+        mes_encontrado = None
+        
+        # Buscar año 4 digitos
+        match_anio = re.search(r'(20\d{2})', nombre_limpio)
+        if match_anio:
+            anio_encontrado = int(match_anio.group(1))
+        
+        # Buscar nombre de mes
+        for nombre_mes, num_mes in self.__MESES_TEXTO.items():
+            if nombre_mes in nombre_limpio:
+                mes_encontrado = num_mes
+                break
+        
+        if anio_encontrado and mes_encontrado:
+            return anio_encontrado, mes_encontrado
+            
         return None, None
     
     def __extraer_plaza_desde_nombre(self, nombre_archivo):
@@ -137,7 +184,7 @@ class ETLTrafico():
         return self.__CATEGORIA_VEHICULO.get(nombre, nombre_hoja.title())
     
     # Método para la transformación en bucle
-    def __transformar_excel(self, ruta_excel):
+    def __transformar_excel(self, ruta_excel, observaciones, anio_carpeta=""):
         """Realiza la transformación ETL principal para un archivo de tráfico."""
         self.__log(f"Transformando archivo: {Path(ruta_excel).name}")
         engine = 'xlrd' if ruta_excel.lower().endswith('.xls') else 'openpyxl'
@@ -153,62 +200,80 @@ class ETLTrafico():
 
         # Extraer año, mes y plaza del nombre del archivo
         nombre_archivo = os.path.basename(ruta_excel)
-        anio, mes = self.__extraer_fecha_desde_nombre(nombre_archivo)
+        
+        anio, mes = self.__extraer_fecha_flexible(nombre_archivo)
+        
+        # Si falla el nombre, usamos la carpeta (Fallback)
+        if not anio and anio_carpeta:
+            anio = int(anio_carpeta)
+            observaciones.append(f"Año tomado de carpeta ({anio}) porque no estaba en nombre.")
+        
+        # Si aún no tenemos mes, tratamos de adivinarlo por los datos o fallamos
+        if not mes:
+            observaciones.append("¡ALERTA! Mes no identificado en nombre. Las fechas podrían fallar.")
+            mes = 1 # Default peligroso, pero permite procesar si la hoja tiene fechas completas
+
         plaza = self.__extraer_plaza_desde_nombre(nombre_archivo)
         
+        if not anio: observaciones.append("No se pudo extraer fecha del nombre del archivo.")
+        if plaza == 'Desconocida': observaciones.append("No se pudo determinar Plaza del nombre.")
+
         for hoja in hojas_validas:
-            # Cargar desde la fila 6
-            # Asumiendo que todas las hojas de cada archivo tiene el mismo formato de la matriz
-            df = xls.parse(hoja, skiprows=5, header=None)
-            df = df.iloc[:, :27] # Sólo las primeras 27 columnas
+            try:
+                # Cargar desde la fila 6
+                # Asumiendo que todas las hojas de cada archivo tiene el mismo formato de la matriz
+                df = xls.parse(hoja, skiprows=5, header=None)
+                df = df.iloc[:, :27] # Sólo las primeras 27 columnas
 
-            # Renombrar columnas
-            columna_hora = [str(h) for h in range(24)]
-            df.columns = ['Col0', 'DiaRaw', 'Direccion'] + columna_hora
+                # Renombrar columnas
+                columna_hora = [str(h) for h in range(24)]
+                df.columns = ['Col0', 'DiaRaw', 'Direccion'] + columna_hora
 
-            # Propagar día hacia abajo
-            df['Dia'] = df['DiaRaw'].ffill()
+                # Propagar día hacia abajo
+                df['Dia'] = df['DiaRaw'].ffill()
 
-            # Filtrar sólo las filas con direction válido
-            df = df[df['Direccion'].isin(['ASCENDENTE', 'DESCENDENTE'])].copy()
+                # Filtrar sólo las filas con direction válido
+                df = df[df['Direccion'].isin(['ASCENDENTE', 'DESCENDENTE'])].copy()
 
-            # Reorganizar el dataframe en filas
-            df_largo = df.melt(id_vars=['Dia', 'Direccion'], value_vars=columna_hora, var_name='Hora', value_name='Contar')
+                # Reorganizar el dataframe en filas
+                df_largo = df.melt(id_vars=['Dia', 'Direccion'], value_vars=columna_hora, var_name='Hora', value_name='Contar')
 
-            # Limpieza final
-            df_largo['Dia'] = pd.to_numeric(df_largo['Dia'], errors='coerce').fillna(-1).astype(int)
-            df_largo = df_largo[df_largo['Dia'] != -1] # Excluir días no válidas
+                # Limpieza final
+                df_largo['Dia'] = pd.to_numeric(df_largo['Dia'], errors='coerce').fillna(-1).astype(int)
+                df_largo = df_largo[df_largo['Dia'] != -1] # Excluir días no válidas
 
-            df_largo['Hora'] = pd.to_numeric(df_largo['Hora'], errors='coerce').fillna(-1).astype(int)
-            df_largo = df_largo[df_largo['Hora'].between(0, 23)]
+                df_largo['Hora'] = pd.to_numeric(df_largo['Hora'], errors='coerce').fillna(-1).astype(int)
+                df_largo = df_largo[df_largo['Hora'].between(0, 23)]
 
-            df_largo['Contar'] = pd.to_numeric(df_largo['Contar'], errors='coerce').fillna(0).astype(int)
+                df_largo['Contar'] = pd.to_numeric(df_largo['Contar'], errors='coerce').fillna(0).astype(int)
 
-            df_largo['Anio'] = anio
-            df_largo['Mes'] = mes
-            df_largo['Fecha'] = pd.to_datetime({'year': df_largo['Anio'], 'month': df_largo['Mes'], 'day': df_largo['Dia']}, errors='coerce')
+                df_largo['Anio'] = anio
+                df_largo['Mes'] = mes
+                df_largo['Fecha'] = pd.to_datetime({'year': df_largo['Anio'], 'month': df_largo['Mes'], 'day': df_largo['Dia']}, errors='coerce')
 
-            num_invalidas = df_largo['Fecha'].isna().sum()
-            if num_invalidas > 0:
-                self.__log(f"[{nombre_archivo} - {hoja}] Se excluyeron {num_invalidas} filas con fecha inválidas")
+                num_invalidas = df_largo['Fecha'].isna().sum()
+                if num_invalidas > 0:
+                    observaciones.append(f"Hoja '{hoja}': Se eliminaron {num_invalidas} filas con Fechas inválidas (días inexistentes en el mes).")
 
-            # Filtrar solo fechas válidas
-            df_largo = df_largo[df_largo['Fecha'].notna()]
-            
-            # Metadato de la categoría del vehículo
-            categoria = self.__traducir_categoria_vehiculo(hoja)
-            df_largo['Categoria'] = categoria
+                # Filtrar solo fechas válidas
+                df_largo = df_largo[df_largo['Fecha'].notna()]
+                
+                # Metadato de la categoría del vehículo
+                categoria = self.__traducir_categoria_vehiculo(hoja)
+                df_largo['Categoria'] = categoria
 
-            if categoria in ['Moto', 'Auto/Camioneta']:
-                tipo = 'Ligero'
-            else:
-                tipo = 'Pesado'
-            
-            df_largo['TipoVehiculo'] = tipo
+                if categoria in ['Moto', 'Auto/Camioneta']:
+                    tipo = 'Ligero'
+                else:
+                    tipo = 'Pesado'
+                
+                df_largo['TipoVehiculo'] = tipo
 
-            df_largo['Plaza'] = plaza
+                df_largo['Plaza'] = plaza
 
-            dataframes.append(df_largo)
+                dataframes.append(df_largo)
+            except Exception as e:
+                observaciones.append(f"Error procesando hoja '{hoja}': {e}")
         
         # Reordenar columnas
         if dataframes:

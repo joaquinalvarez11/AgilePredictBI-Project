@@ -153,11 +153,11 @@ class VistaExportar(ttk.Frame):
         Se ejecuta cuando aparece una carpeta (print-job).
         Esta función corre en un hilo secundario (Watchdog).
         """
-        self.after(0, lambda: self.estado_texto.set(f"Detectada exportación en curso...\nEsperando finalización de Power BI (15s)..."))
+        self.after(0, lambda: self.estado_texto.set(f"Detectada exportación en curso...\nEsperando finalización de Power BI (30s)..."))
         
         # 1. Espera de Seguridad para Power BI
         # Esperamos a que Power BI termine de escribir el archivo dentro de la carpeta
-        time.sleep(15) 
+        time.sleep(30) 
 
         # 2. Buscar el PDF dentro de esa carpeta
         archivos = []
@@ -244,7 +244,6 @@ class FolderHandler(FileSystemEventHandler):
         self.ultimo_tiempo = 0
 
     def on_created(self, event):
-        # AHORA SOLO NOS IMPORTAN LAS CARPETAS
         if not event.is_directory: 
             return
         

@@ -1,13 +1,18 @@
 import pandas as pd
-import numpy as np # Asegurar importación de numpy
+import numpy as np
 import unicodedata
-import os
 import re
+import os
 from pathlib import Path
 from datetime import datetime
 from config_manager import obtener_ruta
 
 class ETLVehiculos():
+
+    __MESES_TEXTO = {
+        'ENERO': '01', 'FEBRERO': '02', 'MARZO': '03', 'ABRIL': '04', 'MAYO': '05', 'JUNIO': '06',
+        'JULIO': '07', 'AGOSTO': '08', 'SEPTIEMBRE': '09', 'OCTUBRE': '10', 'NOVIEMBRE': '11', 'DICIEMBRE': '12'
+    }
 
     def __init__(self):
         """Inicializa las rutas usando el config_manager."""
@@ -29,6 +34,16 @@ class ETLVehiculos():
         return unicodedata.normalize("NFKD", txt).encode("ASCII", "ignore").decode("ASCII")
 
     # --- Método público ---
+    def __extraer_anio_de_ruta(self, ruta_archivo):
+        """Extrae el año de la carpeta contenedora."""
+        try:
+            parts = Path(ruta_archivo).parts
+            for part in reversed(parts[:-1]):
+                if len(part) == 4 and part.isdigit():
+                    return part
+        except: pass
+        return None
+
     def procesar_archivo(self, ruta_archivo_excel):
         """
         Punto de entrada para el controlador. Procesa un único archivo de vehículos.
@@ -36,65 +51,77 @@ class ETLVehiculos():
         self.__log(f"Iniciando procesamiento para: {ruta_archivo_excel}")
         nombre_base = Path(ruta_archivo_excel).stem
 
-        anio_str = self.__extraer_anio_de_ruta(ruta_archivo_excel) # Usa anio
+        # Lista para auditoría
+        obs_calidad = []
+
+        anio_str = self.__extraer_anio_de_ruta(ruta_archivo_excel)
         if not anio_str:
-            self.__log(f"ADVERTENCIA: No se pudo determinar el anio para '{nombre_base}'. Se guardará en la raíz de 'Siniestralidad/Ficha 1'.") # Usa anio
+            obs_calidad.append(f"No se determinó año para '{nombre_base}'. Se guardará en la raíz.")
             anio_str = ""
 
         # Construye la ruta de salida
-        ruta_salida_anio = os.path.join(self.__ruta_limpia_base, anio_str) # Usa anio
-        os.makedirs(ruta_salida_anio, exist_ok=True) # Usa anio
-        ruta_csv_salida = os.path.join(ruta_salida_anio, f"{nombre_base}_Limpio.csv") # Usa anio
+        ruta_salida_anio = os.path.join(self.__ruta_limpia_base, anio_str)
+        os.makedirs(ruta_salida_anio, exist_ok=True)
+        ruta_csv_salida = os.path.join(ruta_salida_anio, f"{nombre_base}_Limpio.csv")
 
         if os.path.exists(ruta_csv_salida):
-            self.__log(f"El archivo '{nombre_base}' ya ha sido procesado en '{anio_str}'. Saltando.") # Usa anio
+            self.__log(f"El archivo '{nombre_base}' ya ha sido procesado en '{anio_str}'. Saltando.")
             return True
 
         try:
-            df_transformado = self.__transformar_excel(ruta_archivo_excel)
+            # Pasar lista de auditoría
+            df_transformado = self.__transformar_excel(ruta_archivo_excel, obs_calidad)
 
             # Chequear si la transformación devolvió None o un DataFrame vacío
             if df_transformado is None or df_transformado.empty:
-                self.__log(f"ADVERTENCIA: La transformación de '{nombre_base}' no produjo datos.")
+                self.__log(f"La transformación de '{nombre_base}' no produjo datos.")
                 return True # Considerar éxito parcial, no guardar
 
             # Guardado del archivo
             df_transformado.to_csv(ruta_csv_salida, index=False, encoding="utf-8-sig")
-            self.__log(f"Éxito: '{nombre_base}' procesado ({len(df_transformado)} filas). Guardado en '{anio_str}'.") # Usa anio
+            self.__log(f"Éxito: '{nombre_base}' procesado ({len(df_transformado)} filas).")
+            
+            # --- REPORTE DE CALIDAD ---
+            if obs_calidad:
+                self.__log(f"--- REPORTE CALIDAD: {nombre_base} ---")
+                for o in obs_calidad:
+                    self.__log(f"   • {o}")
+                self.__log("------------------------------------------")
+            
             return True
         except Exception as e:
             self.__log(f"ERROR CRÍTICO procesando '{nombre_base}': {e}")
             raise e
 
     # --- Métodos privados ---
-    def __extraer_anio_de_ruta(self, ruta_archivo): # Usa anio
-        """Intenta extraer el anio (carpeta 'YYYY') del path del archivo."""
-        try:
-            parts = Path(ruta_archivo).parts
-            for part in reversed(parts[:-1]):
-                if len(part) == 4 and part.isdigit():
-                    return part
-        except Exception as e:
-            self.__log(f"No se pudo extraer anio de la ruta {ruta_archivo}: {e}") # Usa anio
-        return None
+    def __extraer_info_flexible(self, nombre_archivo, anio_carpeta):
+        nombre_clean = nombre_archivo.upper()
+        mes_num = "00"
+        for mes_nom, num_str in self.__MESES_TEXTO.items():
+            if mes_nom in nombre_clean:
+                mes_num = num_str
+                break
+        
+        match_anio = re.search(r'(20\d{2})', nombre_clean)
+        anio_final = match_anio.group(1) if match_anio else anio_carpeta
+        if not anio_final: anio_final = "1900"
+        
+        prefijo = f"{anio_final}{mes_num}"
+        return prefijo
 
-    def __transformar_excel(self, ruta_archivo):
+    def __transformar_excel(self, ruta_archivo, obs_calidad, anio_carpeta=""):
         """
         ETL que replica las transformaciones de Power Query para datos de vehículos,
         incorporando las nuevas funcionalidades.
         """
         self.__log(f"Transformando '{Path(ruta_archivo).name}'...")
 
+        nombre_archivo = Path(ruta_archivo).name
+
         # === 1. Extraer Año y Mes del nombre del archivo ===
-        nombre_archivo = os.path.basename(ruta_archivo)
-        match = re.search(r"(\d{2})\s+\w+\s+(\d{4})", nombre_archivo)
-        if match:
-            mes = match.group(1)
-            anio = match.group(2) # Usa anio
-            prefijo_fecha = f"{anio}{mes}" # Usa anio
-        else:
-            prefijo_fecha = "000000"
-            self.__log(f"Advertencia: No se pudo extraer fecha MM YYYY de '{nombre_archivo}'.")
+        prefijo_fecha = self.__extraer_info_flexible(nombre_archivo, anio_carpeta)
+        if prefijo_fecha.endswith("00"):
+            obs_calidad.append("Advertencia: Mes no detectado en nombre. ID Accidente usará mes '00'.")
 
         # === 2. Leer el Excel saltando las primeras 6 filas ===
         try:
@@ -102,7 +129,7 @@ class ETLVehiculos():
             self.__log(f"Leyendo con motor {engine}...")
             df = pd.read_excel(ruta_archivo, skiprows=6, engine=engine)
         except Exception as e:
-             self.__log(f"Error fatal al leer '{Path(ruta_archivo).name}' (motor {engine}): {e}")
+             self.__log(f"Error fatal al leer '{Path(ruta_archivo).name}': {e}")
              return None # Devolver None si falla
 
         # === 3. Renombrar columnas ===
@@ -115,7 +142,8 @@ class ETLVehiculos():
         df = df.rename(columns={k: v for k, v in column_renames.items() if k in df.columns})
 
 
-        # === NUEVO PASO: ELIMINAR FILAS FANTASMAS REALES ===
+        # === ELIMINAR FILAS FANTASMAS REALES ===
+        filas_iniciales = len(df)
         # 1) Reemplazar valores vacíos o espacios
         df = df.replace(r'^\s*$', np.nan, regex=True)
 
@@ -125,10 +153,13 @@ class ETLVehiculos():
 
         df = df.dropna(subset=cols_datos, how="all").reset_index(drop=True)
 
-
         # === 4. Eliminar filas completamente vacías ===
-        self.__log("Eliminando filas basura (sin Patente Y sin Marca)...")
         df = df.dropna(subset=['Código Accidente', 'Patente', 'Marca'], how='all').reset_index(drop=True) # Resetear índice aquí
+
+        filas_limpias = len(df)
+        fantasmas = filas_iniciales - filas_limpias
+        if fantasmas > 0:
+            obs_calidad.append(f"Se eliminaron {fantasmas} filas vacías o basura.")
 
         # === 5. Convertir columnas a string y limpiar espacios ===
         text_cols = list(column_renames.values()) # Usar nombres nuevos
@@ -169,9 +200,7 @@ class ETLVehiculos():
 
         # === 10. Crear campo "ID Accidente" según cambios en Código Accidente ===
         self.__log("Generando 'ID Accidente' por cambios reales en 'Código Accidente'...")
-
         if "Código Accidente" in df.columns and not df["Código Accidente"].isna().all():
-
             # Normalizar Código Accidente:
             # - string
             # - mayúsculas
@@ -328,8 +357,6 @@ class ETLVehiculos():
 
 
         # === 16. REFORZANDO LA UNIFICACIÓN FINAL DE PATENTE Y MARCA ===
-        self.__log("Aplicando unificación final en Patente y Marca...")
-
         # Listado de valores que deben convertirse a SIN-ANTECEDENTES
         valores_invalidos_global = [
             "-", "SINANTECEDENTES", "SINANTECEDENTE", "SINPPU", "SINPATENTE", "SINANTEDECENTES",
@@ -337,27 +364,28 @@ class ETLVehiculos():
             "0", 0, "", None, np.nan
         ]
 
+        count_sin_antecedentes = 0
         for col in ["Patente", "Marca"]:
             if col in df.columns:
-                df[col] = df[col].astype(str).str.upper().str.strip()
-
-                # Remove punctuation and weird characters
-                df[col] = df[col].str.replace(r"[^A-Z0-9\-]", "", regex=True)
-
-                # Convert patterns like SINPATENTE, SINPU, etc → SIN-ANTECEDENTES
+                df[col] = df[col].astype(str).str.upper().str.strip().str.replace(r"[^A-Z0-9\-]", "", regex=True)
+                
+                # Contar cuántos vamos a forzar a SIN-ANTECEDENTES
+                mask_dirty = df[col].isin(valores_invalidos_global) | (df[col].str.len() < 2)
+                if col == "Marca": mask_dirty = mask_dirty | df["Marca"].str.contains(r"\d", regex=True)
+                
+                count_sin_antecedentes += mask_dirty.sum()
+                
                 df[col] = df[col].replace(valores_invalidos_global, "SIN-ANTECEDENTES")
-
-                # Cualquier valor con longitud menor a 2 → lo consideramos inválido y lo pasamos a SIN-ANTECEDENTES
                 df.loc[df[col].str.len() < 2, col] = "SIN-ANTECEDENTES"
+                if col == "Marca": df.loc[df["Marca"].str.contains(r"\d", regex=True), "Marca"] = "SIN-ANTECEDENTES"
 
-                # Si la marca contiene números → probablemente es error → SIN-ANTECEDENTES
-                df.loc[df["Marca"].str.contains(r"\d", regex=True), "Marca"] = "SIN-ANTECEDENTES"
+        if count_sin_antecedentes > 0:
+            obs_calidad.append(f"Se corrigieron {count_sin_antecedentes} valores de Patente/Marca inválidos a 'SIN-ANTECEDENTES'.")
 
         # === 17. Correcciones de marcas muy largas como CHEVROLETAVEOLS1.4 -> CHEVROLET ===
         df["Marca"] = df["Marca"].str.replace(r"^(CHEVROLET).*", "CHEVROLET", regex=True)
         df["Marca"] = df["Marca"].str.replace(r"^(MERCEDESBENZ).*", "MERCEDES-BENZ", regex=True)
         df["Marca"] = df["Marca"].str.replace(r"^(HYUNDAI).*", "HYUNDAI", regex=True)
         df["Marca"] = df["Marca"].str.replace(r"^(SUZUKI).*", "SUZUKI", regex=True)
-
 
         return df
