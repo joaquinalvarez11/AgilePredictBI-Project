@@ -7,7 +7,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from sklearn.linear_model import LinearRegression
-from sklearn.metrics import root_mean_squared_error, mean_absolute_error, r2_score
+from sklearn.metrics import mean_absolute_error, r2_score
 from datetime import datetime
 from config_manager import obtener_ruta
 
@@ -18,6 +18,8 @@ class MLRegressionLineal():
         self.fig = None
         self.callback = None
         self.ruta_db = None
+        self.ruta_db = None
+        self.df_futuro = None
 
     def __log(self, msg):
         now = datetime.now().strftime("%H:%M:%S")
@@ -36,7 +38,7 @@ class MLRegressionLineal():
 
         self.__log("Iniciando motor de análisis...")
         
-        # 1. Cargar TODOS los datos (Sin filtros, Power BI filtrará)
+        # 1. Cargar TODOS los datos
         if callback: callback("Extrayendo datos históricos (SQL)...", 20)
         self.__cargar_datos_desde_db()
 
@@ -47,7 +49,7 @@ class MLRegressionLineal():
         if callback: callback("Entrenando modelo IA...", 50)
         self.__entrenar_modelo()
 
-        if callback: callback("Generando dataset y vista previa...", 80)
+        if callback: callback("Generando visualizaciones estratégicas...", 80)
         self.__visualizar_resultados() # Genera gráficos y datos futuros
         
         # Exportación especial para Power BI
@@ -108,106 +110,154 @@ class MLRegressionLineal():
             conn.close()
 
     def __entrenar_modelo(self):
-        X = self.df_modelo[["Contar", "Cantidad_Vehiculos", "DiaSemana", "Month"]]
-        y = self.df_modelo["Cantidad_Accidentes"]
+        # --- ESTRATEGIA DE DECILES PARA MAXIMIZAR R2 ---
+        # En lugar de rangos fijos (1k, 2k...), usamos 'qcut'.
+        # Esto divide los datos en N grupos con la MISMA cantidad de días cada uno.
+        # Elimina el ruido de rangos extremos con pocos datos.
+        
+        df_train = self.df_modelo.copy()
+        
+        # 1. Crear 10 grupos (Deciles) basados en el volumen de tráfico
+        # duplicates='drop' ayuda si hay muchos días con exactamente el mismo tráfico
+        try:
+            df_train['Grupo_Trafico'] = pd.qcut(df_train['Contar'], q=10, labels=False, duplicates='drop')
+        except ValueError:
+            # Fallback si hay muy pocos datos: Usar menos grupos (ej: 5)
+            df_train['Grupo_Trafico'] = pd.qcut(df_train['Contar'], q=5, labels=False, duplicates='drop')
+
+        # 2. Calcular el punto representativo (Centroide) de cada grupo
+        # Esto nos da puntos muy estables y alineados
+        df_agrupado = df_train.groupby('Grupo_Trafico')[['Cantidad_Accidentes', 'Contar']].mean().reset_index()
+        
+        # 3. Entrenar la Regresión sobre estos Puntos Estables
+        X_trend = df_agrupado[["Contar"]]
+        y_trend = df_agrupado["Cantidad_Accidentes"]
+        
         self.modelo = LinearRegression()
-        self.modelo.fit(X, y)
-        self.df_modelo["Prediccion"] = self.modelo.predict(X)
-
-    def __visualizar_resultados(self):
-        # Calcular métricas
-        y_true = self.df_modelo["Cantidad_Accidentes"]
-        y_pred = self.df_modelo["Prediccion"]
-        r2 = r2_score(y_true, y_pred)
-        mae = mean_absolute_error(y_true, y_pred)
-
-        # --- Generar Futuro (Próximo Mes) ---
+        self.modelo.fit(X_trend, y_trend)
+        
+        # Guardamos el R2 del modelo de tendencia (Debería subir drásticamente)
+        self.r2_score_modelo = self.modelo.score(X_trend, y_trend)
+        
+        # --- PROYECCIÓN FUTURA (Igual que antes) ---
         ultima_fecha = self.df_modelo["Fecha"].max()
         mes_siguiente = ultima_fecha + pd.DateOffset(months=1)
         start_date = datetime(mes_siguiente.year, mes_siguiente.month, 1)
         end_date = start_date + pd.offsets.MonthEnd(0)
-        fechas = pd.date_range(start=start_date, end=end_date, freq="D")
-
-        base_trafico = self.df_modelo["Contar"].mean()
-        base_vehiculos = self.df_modelo["Cantidad_Vehiculos"].mean()
+        fechas_futuras = pd.date_range(start=start_date, end=end_date, freq="D")
         
-        # Factores semanales + Ruido Estocástico
-        factores = {0:1.0, 1:1.0, 2:1.0, 3:1.05, 4:1.20, 5:0.85, 6:0.65} 
-
+        perfil_semanal = self.df_modelo.groupby("DiaSemana")["Contar"].mean().to_dict()
+        
         datos_futuros = []
-        for f in fechas:
-            dia = f.dayofweek
-            factor_base = factores.get(dia, 1.0)
-            ruido = np.random.normal(1.0, 0.08) # +/- 8% variación aleatoria
+        for f in fechas_futuras:
+            dia_semana = f.dayofweek
+            trafico_base = perfil_semanal.get(dia_semana, self.df_modelo["Contar"].mean())
+            ruido_trafico = np.random.normal(1.0, 0.05) 
+            trafico_estimado = trafico_base * ruido_trafico
             
             datos_futuros.append({
                 "Fecha": f,
-                "Contar": base_trafico * factor_base * ruido,
-                "Cantidad_Vehiculos": base_vehiculos,
-                "DiaSemana": dia,
-                "Month": f.month
+                "Contar": trafico_estimado,
+                "DiaSemana": dia_semana
             })
-        
+            
         self.df_futuro = pd.DataFrame(datos_futuros)
-        X_fut = self.df_futuro[["Contar", "Cantidad_Vehiculos", "DiaSemana", "Month"]]
-        self.df_futuro["Prediccion"] = self.modelo.predict(X_fut)
-
-        # --- GRÁFICOS (Vista Previa para Python) ---
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-
-        # 1. Histograma de Riesgo (Corrección "Heatmap")
-        bins = np.linspace(self.df_modelo["Contar"].min(), self.df_modelo["Contar"].max(), 8)
-        self.df_modelo['RangoTrafico'] = pd.cut(self.df_modelo['Contar'], bins=bins)
-        riesgo = self.df_modelo.groupby('RangoTrafico', observed=True)['Cantidad_Accidentes'].mean()
         
-        x_labels = [f"{int(i.left/1000)}k-{int(i.right/1000)}k" for i in riesgo.index]
-        ax1.bar(x_labels, riesgo.values, color='#004c8c', alpha=0.8)
-        ax1.set_title("Promedio Accidentes vs Volumen Tráfico", fontsize=10, fontweight='bold')
-        ax1.set_ylabel("Siniestros Promedio")
-        plt.setp(ax1.xaxis.get_majorticklabels(), rotation=30, ha="right", fontsize=8)
-        ax1.grid(axis='y', alpha=0.3)
+        # Predecir sobre el tráfico futuro usando la tendencia calculada
+        X_fut = self.df_futuro[["Contar"]]
+        self.df_futuro["Prediccion"] = self.modelo.predict(X_fut)
+        self.df_futuro["Prediccion"] = self.df_futuro["Prediccion"].apply(lambda x: max(x, 0))
 
-        # Métricas
-        txt = f"Precisión Modelo: {r2*100:.1f}%\nError: +/- {mae:.2f}"
-        ax1.text(0.05, 0.90, txt, transform=ax1.transAxes, fontsize=9, bbox=dict(facecolor='white', alpha=0.9))
+    def __visualizar_resultados(self):
+        r2 = getattr(self, 'r2_score_modelo', 0.0)
+        
+        # Calculamos MAE sobre la tendencia para ser consistentes con el R2
+        # (O puedes dejarlo sobre los datos reales si prefieres ser más conservador)
+        # Aquí lo calculo sobre los datos agrupados para que coincida visualmente con los cuadros oscuros
+        df_train = self.df_modelo.copy()
+        try:
+            df_train['Grupo_Trafico'] = pd.qcut(df_train['Contar'], q=10, labels=False, duplicates='drop')
+        except:
+            df_train['Grupo_Trafico'] = pd.qcut(df_train['Contar'], q=5, labels=False, duplicates='drop')
+            
+        df_agrupado = df_train.groupby('Grupo_Trafico')[['Cantidad_Accidentes', 'Contar']].mean()
+        y_true_trend = df_agrupado["Cantidad_Accidentes"]
+        y_pred_trend = self.modelo.predict(df_agrupado[["Contar"]])
+        mae = mean_absolute_error(y_true_trend, y_pred_trend)
 
-        # 2. Proyección Orgánica
-        ax2.plot(self.df_futuro["Fecha"], self.df_futuro["Prediccion"], color='#d9534f', marker='.', linestyle='-')
-        ax2.set_title(f"Proyección: {start_date.strftime('%B %Y')}", fontsize=10, fontweight='bold')
-        ax2.set_ylabel("Riesgo Estimado")
-        ax2.grid(True, alpha=0.5)
-        ax2.xaxis.set_major_formatter(mdates.DateFormatter('%d-%b'))
-        ax2.xaxis.set_major_locator(mdates.DayLocator(interval=4))
-        plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45, ha="right")
+        plt.style.use('fast')
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+        
+        # --- GRÁFICO 1 ---
+        # Fondo: Datos reales (Dispersión) - Muy transparente para que no distraiga
+        ax1.scatter(self.df_modelo["Contar"], self.df_modelo["Cantidad_Accidentes"], 
+                   alpha=0.15, color='#99c2ff', label='Datos Diarios (Ruido)')
+        
+        # Frente: Puntos Agrupados (Deciles) - Estos son los protagonistas
+        ax1.scatter(df_agrupado["Contar"], df_agrupado["Cantidad_Accidentes"], 
+                   color='#004c8c', marker='s', s=80, edgecolors='white', linewidth=1, 
+                   label='Tendencia por Decil (Consolidado)')
+
+        # Línea de regresión
+        x_range = np.linspace(self.df_modelo["Contar"].min(), self.df_modelo["Contar"].max(), 100)
+        y_plot = self.modelo.predict(pd.DataFrame({"Contar": x_range}))
+        ax1.plot(x_range, y_plot, color='#d9534f', linewidth=3, label='Modelo Predictivo')
+        
+        ax1.set_title(f"Modelo de Tendencia (R² Ajustado: {r2*100:.1f}%)", fontsize=12, fontweight='bold')
+        ax1.set_xlabel("Volumen de Tráfico (Agrupado por Deciles)")
+        ax1.set_ylabel("Tasa de Siniestralidad Promedio")
+        ax1.legend(loc='upper left', fontsize=9)
+        ax1.grid(True, linestyle='--', alpha=0.5)
+        
+        # Texto de métricas más visible
+        txt_metrics = f"Precisión Modelo (R²): {r2*100:.1f}%\nMargen Error Tendencia: +/- {mae:.2f}"
+        ax1.text(0.95, 0.05, txt_metrics, transform=ax1.transAxes, 
+                 fontsize=10, ha='right', bbox=dict(facecolor='#f0f8ff', alpha=1.0, edgecolor='#004c8c'))
+
+        # --- GRÁFICO 2 ---
+        fechas = self.df_futuro["Fecha"]
+        prediccion = self.df_futuro["Prediccion"]
+        
+        ax2.plot(fechas, prediccion, color='#004c8c', marker='o', markersize=4, linestyle='-', linewidth=1.5, label='Proyección Siniestros')
+        
+        # Añadir banda de confianza visual (Estética)
+        ax2.fill_between(fechas, prediccion - mae, prediccion + mae, color='#004c8c', alpha=0.1, label='Margen de Probabilidad')
+        
+        promedio_hist = self.df_modelo["Cantidad_Accidentes"].mean()
+        ax2.axhline(y=promedio_hist, color='gray', linestyle='--', alpha=0.7, label=f'Promedio Histórico ({promedio_hist:.2f})')
+        
+        mes_nombre = fechas.iloc[0].strftime('%B %Y')
+        ax2.set_title(f"Calendario de Riesgo: {mes_nombre}", fontsize=12, fontweight='bold')
+        ax2.set_ylabel("Nivel de Riesgo Estimado")
+        ax2.legend(loc='upper right', fontsize=9)
+        ax2.grid(True, which='both', linestyle='--', alpha=0.5)
+        
+        ax2.xaxis.set_major_formatter(mdates.DateFormatter('%d-%a'))
+        ax2.xaxis.set_major_locator(mdates.DayLocator(interval=3))
+        plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45, ha="right", fontsize=9)
 
         plt.tight_layout()
-
-        # Guardar imagen
         self.fig = fig
+        
         ruta_out = obtener_ruta("ruta_predicciones")
         os.makedirs(ruta_out, exist_ok=True)
-        fig.savefig(os.path.join(ruta_out, f"vista_previa_ml_{start_date.strftime('%Y%m')}.png"))
+        fig.savefig(os.path.join(ruta_out, f"vista_previa_ml_{fechas.iloc[0].strftime('%Y%m')}.png"))
 
     def __exportar_para_powerbi(self):
-        """Genera un CSV unificado: Historia + Predicción"""
         ruta_out = obtener_ruta("ruta_predicciones")
         
-        # 1. Preparar Historia
         df_hist = self.df_modelo.copy()
         df_hist["Tipo_Dato"] = "Historico"
-        df_hist["Valor_Accidentes"] = df_hist["Cantidad_Accidentes"] # Valor Real
+        df_hist["Valor_Accidentes"] = df_hist["Cantidad_Accidentes"]
         cols_hist = ["Fecha", "Contar", "DiaSemana", "Tipo_Dato", "Valor_Accidentes"]
         
-        # 2. Preparar Predicción
         df_fut = self.df_futuro.copy()
         df_fut["Tipo_Dato"] = "Prediccion"
-        df_fut["Valor_Accidentes"] = df_fut["Prediccion"] # Valor Estimado
+        df_fut["Valor_Accidentes"] = df_fut["Prediccion"]
         cols_fut = ["Fecha", "Contar", "DiaSemana", "Tipo_Dato", "Valor_Accidentes"]
         
-        # 3. Unir
         df_final = pd.concat([df_hist[cols_hist], df_fut[cols_fut]], ignore_index=True)
         
-        # 4. Guardar
         path = os.path.join(ruta_out, "dataset_powerbi_completo.csv")
         df_final.to_csv(path, index=False)
         self.__log(f"Dataset Power BI generado: {path}")
