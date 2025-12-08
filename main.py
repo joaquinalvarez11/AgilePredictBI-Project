@@ -1,5 +1,6 @@
 import os, sys
 import tkinter as tk
+from tkinter import messagebox
 from views.vista1_bienvenida import VistaBienvenida
 from views.vista_login import VistaLogin
 from views.vista3_resultados import VistaResultados
@@ -15,6 +16,17 @@ class AgilePredictApp(tk.Tk):
         self.title("AgilePredictBI - Asistente Predictivo")
         self.centrar_ventana(1200, 700)
         self.resizable(False, False)
+        
+        # Lista para procesos activos
+        self.procesos_activos = []
+        self.procesos_nombres = {
+            "VistaETL": "Gestión de Datos (ETL)",
+            "VistaML": "Análisis Predictivo",
+            "VistaExportar": "Informes y Reportes"
+        }
+
+        # Interceptar el cierre de ventana
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
         
         if getattr(sys, 'frozen', False):
             base_path = sys._MEIPASS
@@ -50,6 +62,25 @@ class AgilePredictApp(tk.Tk):
             frame.grid(row=0, column=0, sticky="nsew")
 
         self.show_frame(VistaBienvenida)
+
+    def on_closing(self):
+        """Validar si hay procesos activos antes de cerrar."""
+        if self.procesos_activos:
+            lista = [
+                self.procesos_nombres.get(v.__class__.__name__, v.__class__.__name__)
+                for v in self.procesos_activos
+            ]
+            
+            procesos_texto = "\n".join(f"- {n}" for n in lista)
+
+            messagebox.showwarning(
+                "Procesos en ejecución",
+                f"Tiene uno o más procesos activos. No puede cerrar la aplicación.\n"
+                f"Procesos en curso:\n{procesos_texto}"
+            )
+            return
+        
+        self.destroy()
     
     # Método para centrar la ventana
     def centrar_ventana(self, ancho=1200, alto=700):

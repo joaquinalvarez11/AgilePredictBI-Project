@@ -139,6 +139,8 @@ class VistaExportar(ttk.Frame):
             self.estado_texto.set("MONITOR ACTIVO\nEsperando que Power BI genere una carpeta de exportación...")
         except Exception as e:
             messagebox.showerror("Error", f"Fallo al iniciar Watchdog: {e}")
+        
+        self.controller.procesos_activos.append(self)
 
     def detener_monitor(self):
         if self.observer:
@@ -147,6 +149,9 @@ class VistaExportar(ttk.Frame):
         self.monitor_activo = False
         self.btn_monitor.config(text="INICIAR MONITOR", bg="#337ab7")
         self.estado_texto.set("Monitor detenido.")
+
+        if self in self.controller.procesos_activos:
+            self.controller.procesos_activos.remove(self)
 
     def procesar_carpeta_detectada(self, ruta_carpeta):
         """

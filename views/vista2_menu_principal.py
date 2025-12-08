@@ -204,6 +204,21 @@ class VistaMenuPrincipal(tk.Frame):
             messagebox.showinfo("Restauración", "Datos recuperados exitosamente.")
 
     def cerrar_sesion(self):
+        if self.controller.procesos_activos:
+            lista = [
+                self.controller.procesos_nombres.get(v.__class__.__name__, v.__class__.__name__)
+                for v in self.controller.procesos_activos
+            ]
+            
+            procesos_texto = "\n".join(f"- {n}" for n in lista)
+
+            messagebox.showwarning(
+                "Procesos en ejecución",
+                f"Tiene uno o más procesos activos. No puede cerrar sesión.\n"
+                f"Procesos en curso:\n{procesos_texto}"
+            )
+            return
+        
         respuesta = messagebox.askyesno("Confirmación", "¿Desea cerrar la sesión actual?")
         if respuesta:
             self.controller.show_frame_by_name("VistaBienvenida")

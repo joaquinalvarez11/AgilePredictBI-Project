@@ -106,6 +106,14 @@ class VistaETL(tk.Frame):
         self.update_idletasks()
 
     def iniciar_proceso_en_thread(self):
+        for vista in self.controller.procesos_activos:
+            if vista.__class__.__name__ == "VistaML":
+                messagebox.showwarning(
+                    "Proceso en conflicto",
+                    "No puede iniciar la Sincronización Masiva mientras el Análisis Predictivo está en ejecución."
+                )
+                return
+            
         self.btn_ejecutar.config(state='disabled', text="Procesando...", bg="#cccccc")
         self.btn_cancelar.config(state='normal', bg="#d9534f")
         self.lbl_progreso.config(text="Progreso: 0.0% (Iniciando...)") 
@@ -118,6 +126,8 @@ class VistaETL(tk.Frame):
 
         self.etl_thread = threading.Thread(target=self.ejecutar_proceso_completo, args=(self.progreso_callback, self.cancel_event))
         self.etl_thread.start()
+
+        self.controller.procesos_activos.append(self)
 
     def cancelar_proceso(self):
         if self.etl_thread and self.etl_thread.is_alive():
@@ -197,6 +207,9 @@ class VistaETL(tk.Frame):
                  messagebox.showinfo("Éxito", "Sincronización completada correctamente.")
              else:
                  messagebox.showwarning("Atención", "Proceso finalizado con advertencias.")
+        
+        if self in self.controller.procesos_activos:
+            self.controller.procesos_activos.remove(self)
 
     def finalizar_proceso_con_error(self, error_msg):
         self.progreso_callback("\n--- ERROR CRÍTICO ---")
