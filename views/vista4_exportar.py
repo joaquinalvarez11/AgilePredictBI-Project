@@ -8,6 +8,13 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from PyPDF2 import PdfReader, PdfWriter
 
+try:
+    from config_manager import obtener_ruta
+except ImportError:
+    # Fallback por si se ejecuta fuera de la estructura del proyecto
+    def obtener_ruta(nombre):
+        return os.path.join(os.path.expanduser("~"), "Desktop")
+
 # Ruta temporal donde Power BI crea las carpetas "print-job"
 USER_HOME = os.path.expanduser("~")
 CARPETA_ORIGEN_PBI = os.path.join(USER_HOME, r"AppData\Local\Temp\Power BI Desktop")
@@ -34,10 +41,16 @@ class VistaExportar(ttk.Frame):
         self.monitor_activo = False
         self.observer = None
         
-        path_escritorio = os.path.join(USER_HOME, "Desktop")
-        self.ruta_destino = tk.StringVar(value=path_escritorio)
+        # 1. CARGA AUTOMÁTICA DE LA RUTA DESDE CONFIG
+        try:
+            ruta_configurada = obtener_ruta("ruta_informes")
+            self.ruta_destino = tk.StringVar(value=ruta_configurada)
+        except Exception as e:
+            print(f"No se pudo cargar ruta del config: {e}")
+            self.ruta_destino = tk.StringVar(value=os.path.join(USER_HOME, "Desktop"))
+
         self.tipo_reporte = tk.StringVar(value="Tráfico") 
-        self.paginas_seleccion = tk.StringVar(value="1-3")
+        self.paginas_seleccion = tk.StringVar(value="2-3")
         self.estado_texto = tk.StringVar(value="Sistema en espera. Configure y active el monitor.")
 
         # --- Interfaz Gráfica ---
@@ -55,18 +68,22 @@ class VistaExportar(ttk.Frame):
 
         # 1. Carpeta Destino
         ttk.Label(frame_config, text="Directorio de salida:", style="Export.TLabel").pack(anchor="w", pady=5)
-        frame_ruta = ttk.Frame(frame_config, style="Export.TLabelframe") # Hereda bg blanco
+        frame_ruta = ttk.Frame(frame_config, style="Export.TLabelframe")
         frame_ruta.pack(fill="x", pady=5)
         
         entry_ruta = ttk.Entry(frame_ruta, textvariable=self.ruta_destino, state="readonly")
         entry_ruta.pack(side="left", fill="x", expand=True)
-        ttk.Button(frame_ruta, text="📂", width=3, command=self.seleccionar_carpeta).pack(side="right", padx=5)
 
         # 2. Selector de Tipo
         ttk.Label(frame_config, text="Categoría del Informe:", style="Export.TLabel").pack(anchor="w", pady=(20, 5))
-        opciones_reporte = ["Tráfico", "Siniestro", "Predicción", "Ejecutivo_General"]
-        combo_tipo = ttk.Combobox(frame_config, textvariable=self.tipo_reporte, values=opciones_reporte, state="readonly", font=("Helvetica", 10))
-        combo_tipo.pack(fill="x", pady=5)
+        
+        opciones_reporte = ["Tráfico", "Siniestro", "Ejecutivo", "Presentación", "Predicción"]
+        self.combo_tipo = ttk.Combobox(frame_config, textvariable=self.tipo_reporte, values=opciones_reporte, state="readonly", font=("Helvetica", 10))
+        self.combo_tipo.pack(fill="x", pady=5)
+        
+        # VINCULAR EVENTO DE CAMBIO DE SELECCIÓN
+        self.combo_tipo.bind("<<ComboboxSelected>>", self.auto_seleccionar_paginas)
+
         ttk.Label(frame_config, text="Nomenclatura: Categoría_Fecha.pdf", font=("Helvetica", 8), foreground="#888888", background="white").pack(anchor="w")
 
         # 3. Páginas
@@ -106,10 +123,25 @@ class VistaExportar(ttk.Frame):
         # Botón Volver
         ttk.Button(self, text="Volver al Menú Principal", command=lambda: controller.show_menu_principal()).grid(row=2, column=0, columnspan=2, pady=30)
 
-    def seleccionar_carpeta(self):
-        folder = filedialog.askdirectory()
-        if folder:
-            self.ruta_destino.set(folder)
+        # Ejecutar la selección inicial
+        self.auto_seleccionar_paginas()
+
+    def auto_seleccionar_paginas(self, event=None):
+        seleccion = self.tipo_reporte.get()
+        paginas = ""
+        
+        if seleccion == "Tráfico":
+            paginas = "2-3"
+        elif seleccion == "Siniestro":
+            paginas = "6-8"
+        elif seleccion == "Ejecutivo":
+            paginas = ""
+        elif seleccion == "Presentación":
+            paginas = "4-5"
+        elif seleccion == "Predicción":
+            paginas = "9"
+            
+        self.paginas_seleccion.set(paginas)
 
     def toggle_monitor(self):
         if not self.monitor_activo:
@@ -183,23 +215,25 @@ class VistaExportar(ttk.Frame):
 
     def ejecutar_transformacion(self, ruta_origen):
         try:
-            # Construir nombre final
+            # 1. Generar nombre
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
-            tipo = self.tipo_reporte.get() # Obtener valor del Combobox
+            tipo = self.tipo_reporte.get()
             nombre_final = f"{tipo}_{timestamp}.pdf"
-            ruta_final = os.path.join(self.ruta_destino.get(), nombre_final)
+            
+            # 2. Ruta Destino (desde la variable que cargamos con config)
+            ruta_destino_final = os.path.join(self.ruta_destino.get(), nombre_final)
 
-            # Mover (Intentar varias veces por si acaso sigue bloqueado)
-            shutil.move(ruta_origen, ruta_final)
-
-            # Limpiar páginas (Cortar)
+            # 3. Mover y Limpiar
+            shutil.move(ruta_origen, ruta_destino_final)
+            
             paginas_str = self.paginas_seleccion.get()
             if paginas_str:
-                ruta_limpia = self.limpiar_paginas(ruta_final, paginas_str)
-                os.remove(ruta_final)
-                os.rename(ruta_limpia, ruta_final)
+                ruta_limpia = self.limpiar_paginas(ruta_destino_final, paginas_str)
+                # Si limpiar_paginas devuelve una ruta distinta (temp), renombramos
+                if ruta_limpia != ruta_destino_final:
+                    os.remove(ruta_destino_final)
+                    os.rename(ruta_limpia, ruta_destino_final)
 
-            # Notificar éxito en el hilo principal
             self.after(0, lambda: self.exito_ui(nombre_final))
 
         except Exception as e:
@@ -207,7 +241,6 @@ class VistaExportar(ttk.Frame):
             self.after(0, lambda: self.estado_texto.set(f"Error: {str(e)}"))
 
     def limpiar_paginas(self, ruta_pdf, paginas_str):
-        """Misma lógica de limpieza, robusta ante errores de input"""
         reader = PdfReader(ruta_pdf)
         writer = PdfWriter()
         total_paginas = len(reader.pages)
@@ -238,9 +271,8 @@ class VistaExportar(ttk.Frame):
         return ruta_temp
 
     def exito_ui(self, nombre):
-        self.estado_texto.set(f"Finalizado.\nArchivo generado: {nombre}\nUbicación: {self.ruta_destino.get()}")
-        # Opcional: Abrir carpeta o mostrar popup. Para ejecutivo, el texto verde en consola suele bastar.
-        # messagebox.showinfo("Listo", f"Reporte generado: {nombre}") 
+        self.estado_texto.set(f"Finalizado.\nArchivo generado: {nombre}\nGuardado en: Informes")
+        os.startfile(self.ruta_destino.get())
 
 # --- Handler Modificado para Carpetas ---
 class FolderHandler(FileSystemEventHandler):
@@ -251,10 +283,6 @@ class FolderHandler(FileSystemEventHandler):
     def on_created(self, event):
         if not event.is_directory: 
             return
-        
-        # Verificar que sea una carpeta temporal de Power BI (opcional, pero recomendado)
-        # Power BI suele crear carpetas "print-job-xxxx" o GUIDs. 
-        # Aceptamos cualquier carpeta nueva en Temp/Power BI Desktop
         
         ahora = time.time()
         if ahora - self.ultimo_tiempo < 5: # Debounce de 5s

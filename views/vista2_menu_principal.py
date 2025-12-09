@@ -175,6 +175,8 @@ class VistaMenuPrincipal(tk.Frame):
                 "Excel Brutos": obtener_ruta("ruta_excel_bruto"),
                 "Excel Limpios": obtener_ruta("ruta_csv_limpio"),
                 "Predicciones": obtener_ruta("ruta_predicciones"),
+                "Informes": obtener_ruta("ruta_informes"),
+                "Power BI": obtener_ruta("ruta_powerbi"),
                 "database": obtener_ruta("ruta_database")
             }
             fuentes_validas = {nombre: ruta for nombre, ruta in rutas.items() if ruta}
