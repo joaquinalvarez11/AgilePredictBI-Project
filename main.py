@@ -1,5 +1,8 @@
+import os, sys
 import tkinter as tk
+from tkinter import messagebox
 from views.vista1_bienvenida import VistaBienvenida
+from views.vista_login import VistaLogin
 from views.vista3_resultados import VistaResultados
 from views.vista4_exportar import VistaExportar
 
@@ -13,6 +16,25 @@ class AgilePredictApp(tk.Tk):
         self.title("AgilePredictBI - Asistente Predictivo")
         self.centrar_ventana(1200, 700)
         self.resizable(False, False)
+        
+        # Lista para procesos activos
+        self.procesos_activos = []
+        self.procesos_nombres = {
+            "VistaETL": "Gestión de Datos (ETL)",
+            "VistaML": "Análisis Predictivo",
+            "VistaExportar": "Informes y Reportes"
+        }
+
+        # Interceptar el cierre de ventana
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
+        
+        if getattr(sys, 'frozen', False):
+            base_path = sys._MEIPASS
+        else:
+            base_path = os.path.dirname(__file__)
+        
+        icon_path = os.path.join(base_path, "assets", "agilepredictbi_Logo.ico")
+        self.iconbitmap(icon_path)
 
         # Contenedor principal para todas las vistas
         container = tk.Frame(self)
@@ -26,8 +48,9 @@ class AgilePredictApp(tk.Tk):
 
         # Lista de las clases de vistas a usar
         list_of_pages = [
-            VistaBienvenida, 
-            VistaMenuPrincipal, 
+            VistaBienvenida,
+            VistaLogin,
+            VistaMenuPrincipal,
             VistaETL,
             VistaML,
             VistaExportar
@@ -39,6 +62,25 @@ class AgilePredictApp(tk.Tk):
             frame.grid(row=0, column=0, sticky="nsew")
 
         self.show_frame(VistaBienvenida)
+
+    def on_closing(self):
+        """Validar si hay procesos activos antes de cerrar."""
+        if self.procesos_activos:
+            lista = [
+                self.procesos_nombres.get(v.__class__.__name__, v.__class__.__name__)
+                for v in self.procesos_activos
+            ]
+            
+            procesos_texto = "\n".join(f"- {n}" for n in lista)
+
+            messagebox.showwarning(
+                "Procesos en ejecución",
+                f"Tiene uno o más procesos activos. No puede cerrar la aplicación.\n"
+                f"Procesos en curso:\n{procesos_texto}"
+            )
+            return
+        
+        self.destroy()
     
     # Método para centrar la ventana
     def centrar_ventana(self, ancho=1200, alto=700):
@@ -58,7 +100,21 @@ class AgilePredictApp(tk.Tk):
         frame = self.frames[cont]
         frame.tkraise() # Trae el frame seleccionado al frente
 
+    def show_frame_by_name(self, name):
+        """Permite llamar a una vista usando su nombre como string (útil para lógica dinámica)"""
+        # Mapeo simple de strings a clases
+        mapping = {
+            "VistaBienvenida": VistaBienvenida,
+            "VistaLogin": VistaLogin,
+            "VistaMenuPrincipal": VistaMenuPrincipal
+        }
+        if name in mapping:
+            self.show_frame(mapping[name])
+
     # Métodos de navegación llamados desde los botones de las vistas
+    def show_login_view(self):
+        self.show_frame(VistaLogin)
+    
     def show_menu_principal(self):
         self.show_frame(VistaMenuPrincipal)
 

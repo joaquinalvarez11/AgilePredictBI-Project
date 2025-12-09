@@ -28,7 +28,6 @@ def run(callback):
     try:
         # --- 1. Conectar a la base de datos ---
         ruta_db = obtener_ruta("ruta_database")
-        print(f"Conectando a la base de datos en: {ruta_db}")
         conn = sqlite3.connect(ruta_db)
         cursor = conn.cursor()
 
@@ -36,14 +35,12 @@ def run(callback):
         count = cursor.fetchone()[0]
         
         if count > 0:
-            callback(f"dim_DateTime ya está poblada con {count} registros. No se necesita carga.")
+            callback(f"dim_DateTime ya está poblada con {count} registros. Omitiendo.")
             conn.close()
             return
 
         # --- 2. Si count es 0, proceder con la generación ---
         callback(f"Tabla dim_DateTime vacía. Generando {end_date} registros (por minuto)...")
-        callback("Esto puede tardar varios minutos.")
-        start_gen = time.time()
         
         try:
             minute_dates = pd.date_range(start=start_date, end=end_date, freq='min')
@@ -51,8 +48,7 @@ def run(callback):
             minute_dates = pd.date_range(start=start_date, end=end_date, freq='T') # Fallback para versiones antiguas
 
         df = pd.DataFrame(minute_dates, columns=['DateTime_dt'])
-        end_gen = time.time()
-        callback(f"Se generaron {len(df)} filas en {end_gen - start_gen:.2f}s. Creando columnas...")
+        callback(f"Se generaron {len(df)} filas. Creando columnas...")
 
         # 3. Extraer todas las columnas necesarias
         df['idDateTime'] = range(1, len(df) + 1)
@@ -83,12 +79,10 @@ def run(callback):
         df_final = df[columnas_finales]
 
         # 4. Cargar a SQLite
-        callback(f"Cargando {len(df_final)} registros en la base de datos...")
-        start_load = time.time()
+        callback(f"Insertando {len(df_final)} registros en la base de datos. Por favor espere.")
         df_final.to_sql("dim_DateTime", conn, if_exists="append", index=False)
         conn.commit()
-        end_load = time.time()
-        callback(f"Éxito: Se cargaron {len(df_final)} registros en {end_load - start_load:.2f}s.")
+        callback(f"Éxito: Se cargaron {len(df_final)} registros.")
 
     except Exception as e:
         callback(f"Error al cargar dim_DateTime: {e}")

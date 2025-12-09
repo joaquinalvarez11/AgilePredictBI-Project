@@ -4,6 +4,7 @@ import threading
 import re
 import sys
 import os
+import time
 
 from proceso_etl import deteccion_auto
 current_dir = os.path.dirname(__file__)
@@ -105,6 +106,14 @@ class VistaETL(tk.Frame):
         self.update_idletasks()
 
     def iniciar_proceso_en_thread(self):
+        for vista in self.controller.procesos_activos:
+            if vista.__class__.__name__ == "VistaML":
+                messagebox.showwarning(
+                    "Proceso en conflicto",
+                    "No puede iniciar la Sincronización Masiva mientras el Análisis Predictivo está en ejecución."
+                )
+                return
+            
         self.btn_ejecutar.config(state='disabled', text="Procesando...", bg="#cccccc")
         self.btn_cancelar.config(state='normal', bg="#d9534f")
         self.lbl_progreso.config(text="Progreso: 0.0% (Iniciando...)") 
@@ -112,9 +121,13 @@ class VistaETL(tk.Frame):
         self.txt_status.delete('1.0', tk.END)
         self.txt_status.config(state='disabled')
         self.cancel_event.clear()
+        
+        self.tiempo_inicio_global = time.time()
 
         self.etl_thread = threading.Thread(target=self.ejecutar_proceso_completo, args=(self.progreso_callback, self.cancel_event))
         self.etl_thread.start()
+
+        self.controller.procesos_activos.append(self)
 
     def cancelar_proceso(self):
         if self.etl_thread and self.etl_thread.is_alive():
@@ -126,6 +139,7 @@ class VistaETL(tk.Frame):
         mensaje_resumen_final = "Proceso terminado inesperadamente."
         proceso_cancelado = False
         try:
+            # --- FASE 1 ---
             callback_para_etl_1 = lambda msg, curr=None, tot=None: callback_original(msg, curr, tot, etapa=1)
             callback_original("\n" + "="*30 + " INICIANDO FASE 1: EXCEL A CSV ...", etapa=1)
             
@@ -141,8 +155,8 @@ class VistaETL(tk.Frame):
             if "Errores: 0" not in resumen_etl1:
                 callback_para_etl_1("\nADVERTENCIA: Se detectaron errores en la fase 1.")
 
+            # --- FASE 2 ---
             callback_para_etl_2 = lambda msg, curr=None, tot=None: callback_original(msg, curr, tot, etapa=2)
-
             callback_original("\n" + "="*30 + " INICIANDO FASE 2: CARGA A BASE DE DATOS ...", etapa=2)
             
             resumen_etl2 = cargar_bd.ejecutar_carga_db_completa(
@@ -155,14 +169,20 @@ class VistaETL(tk.Frame):
                 return
 
             mensaje_resumen_final = f"ETL 1: {resumen_etl1}\nETL 2: {resumen_etl2}"
-            self.after(0, self.finalizar_proceso, mensaje_resumen_final, proceso_cancelado)
+            duracion_total = time.time() - self.tiempo_inicio_global
+            self.after(0, self.finalizar_proceso, mensaje_resumen_final, proceso_cancelado, duracion_total)
             
         except Exception as e:
             error_msg = f"Error no capturado:\n{type(e).__name__}: {e}"
             self.after(0, self.finalizar_proceso_con_error, error_msg)
 
-    def finalizar_proceso(self, mensaje_resumen, cancelado):
+    def finalizar_proceso(self, mensaje_resumen, cancelado, duracion_segundos=0):
+        mins = int(duracion_segundos // 60)
+        segs = int(duracion_segundos % 60)
+        tiempo_str = f"{mins} min {segs} seg"
+
         self.progreso_callback("\n" + "="*40 + " PROCESO FINALIZADO " + "="*40)
+        self.progreso_callback(f"Tiempo Total de Ejecución: {tiempo_str}")
         
         if not cancelado:
             try:
@@ -187,6 +207,9 @@ class VistaETL(tk.Frame):
                  messagebox.showinfo("Éxito", "Sincronización completada correctamente.")
              else:
                  messagebox.showwarning("Atención", "Proceso finalizado con advertencias.")
+        
+        if self in self.controller.procesos_activos:
+            self.controller.procesos_activos.remove(self)
 
     def finalizar_proceso_con_error(self, error_msg):
         self.progreso_callback("\n--- ERROR CRÍTICO ---")

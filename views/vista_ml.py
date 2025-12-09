@@ -111,6 +111,14 @@ class VistaML(ttk.Frame):
         btn_back.pack()
 
     def iniciar_proceso_en_thread(self):
+        for vista in self.controller.procesos_activos:
+            if vista.__class__.__name__ == "VistaETL":
+                messagebox.showwarning(
+                    "Proceso en conflicto",
+                    "No puede iniciar el Análisis Predictivo mientras la Gestión de Datos está en ejecución."
+                )
+                return
+            
         if self.canvas_widget:
             self.canvas_widget.destroy()
             self.canvas_widget = None
@@ -123,6 +131,8 @@ class VistaML(ttk.Frame):
 
         self.ml_thread = threading.Thread(target=self.ejecutar_analisis)
         self.ml_thread.start()
+
+        self.controller.procesos_activos.append(self)
     
     def progreso_callback(self, mensaje, porcentaje=None):
         if not self.winfo_exists():
@@ -172,7 +182,7 @@ class VistaML(ttk.Frame):
             self.canvas_widget = canvas.get_tk_widget()
             self.canvas_widget.configure(bg="white")
             
-            # CORRECCIÓN AQUÍ: Usamos row=0, column=0 para que ocupe el mismo espacio que los logs
+            # Usamos row=0, column=0 para que ocupe el mismo espacio que los logs
             self.canvas_widget.grid(row=0, column=0, sticky="nsew")
 
             self.frame_logs.grid_remove()
@@ -196,6 +206,9 @@ class VistaML(ttk.Frame):
             self.progreso_callback("Proceso completado.", 100)
             
             self.after(0, lambda: messagebox.showinfo("Análisis Completado", "Predicción realizada exitosamente."))
+
+            if self in self.controller.procesos_activos:
+                self.controller.procesos_activos.remove(self)
             
         except Exception as e:
             traceback.print_exc()

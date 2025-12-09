@@ -241,8 +241,9 @@ def run(callback):
             callback(f"ADVERTENCIA: {len(dirty_files)} archivos con errores no se registraron en etl_log_ficha1_vehiculos y serán reintentados.")
 
         if failed_rows_details:
-            callback("\n--- ⚠️ Reporte Detallado de Errores de Carga (Ficha 1) ---")
+            callback("\n--- Reporte Detallado de Errores de Carga (Ficha 1) ---")
             callback(f"Se omitieron {len(failed_rows_details)} filas por errores de FK, validación o de BD.")
+
             for i, (fila, error, archivo) in enumerate(failed_rows_details[:10]): # Mostrar solo los primeros 10
                 callback(f"\n - Archivo: {archivo}")
                 callback(f" Error: {error}")

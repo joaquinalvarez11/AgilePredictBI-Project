@@ -6,159 +6,132 @@ from datetime import datetime
 import time
 from config_manager import obtener_ruta
 
-# --- INICIO DE INTEGRACIÓN ---
-
-# === 1. Definir rutas ===
+# === 1. Rutas ===
 def get_paths():
     try:
-        ruta_db = obtener_ruta("ruta_database")
-        ruta_csv_limpio = obtener_ruta("ruta_csv_limpio")
-        ruta_base_csv_ficha0 = os.path.join(ruta_csv_limpio, "Siniestralidad", "Ficha 0")
-        
-        return ruta_db, ruta_base_csv_ficha0
+        # Asegurarse de devolver la ruta correcta a Ficha 0
+        return obtener_ruta("ruta_database"), os.path.join(obtener_ruta("ruta_csv_limpio"), "Siniestralidad", "Ficha 0")
     except Exception as e:
-        raise RuntimeError(f"Error al cargar rutas desde config_manager: {e}")
+        raise RuntimeError(f"Error config: {e}")
 
-# === 2. Función Helper ===
+# === 2. Helper Obtener FK ===
 def obtener_fk(cursor, row, mapa_datetime_local, callback):
     fks = {}
     
-    # --- Lookup dim_DateTime ---
+    # 2.1 Validación de Fecha
     try:
         csv_timestamp_str = str(row['FECHA/HORA'])
         if pd.isna(csv_timestamp_str) or csv_timestamp_str == 'nan':
-            callback(f"Error fatal procesando fecha: {row['FECHA/HORA']}. Se usará NULL.")
-            fks['idDateTime'] = None # Marcar como None
+            fks['idDateTime'] = None 
         else:
             dt_obj = None
-            try:
-                dt_obj = pd.to_datetime(csv_timestamp_str, format='%d/%m/%Y %H:%M')
-            except ValueError:
-                try:
-                    dt_obj = pd.to_datetime(csv_timestamp_str, format='%Y-%m-%d %H:%M:%S')
-                except Exception as e2:
-                    callback(f"Error procesando fecha '{csv_timestamp_str}' en ambos formatos: {e2}. Se usará NULL.")
-                    fks['idDateTime'] = None
-
-            if dt_obj is not None:
-                # Formato de búsqueda :SS (segundos)
-                search_timestamp_str = dt_obj.strftime('%Y-%m-%d %H:%M:00')
-                resultado_id = mapa_datetime_local.get(search_timestamp_str)
-                
-                if resultado_id:
-                    fks['idDateTime'] = resultado_id
-                else:
-                    callback(f"Advertencia: No se encontró la fecha/minuto {search_timestamp_str} (de {csv_timestamp_str}) en dim_DateTime. Se usará NULL.")
-                    fks['idDateTime'] = None
-
-    except Exception as e:
-        callback(f"Error fatal procesando fecha: {row['FECHA/HORA']} -> {e}. Se usará NULL.")
+            try: dt_obj = pd.to_datetime(csv_timestamp_str, format='%d/%m/%Y %H:%M')
+            except: 
+                try: dt_obj = pd.to_datetime(csv_timestamp_str, format='%Y-%m-%d %H:%M:%S')
+                except: pass
+            
+            if dt_obj:
+                search_key = dt_obj.strftime('%Y-%m-%d %H:%M:00')
+                fks['idDateTime'] = mapa_datetime_local.get(search_key)
+            else:
+                fks['idDateTime'] = None
+    except: 
         fks['idDateTime'] = None
 
-    # --- Lookups 1:N (Directos) ---
-    try:
-        def safe_int_convert(value, default=0):
-            val_num = pd.to_numeric(value, errors='coerce')
-            if pd.isna(val_num):
-                return default
-            return int(val_num)
-
-        fks['idAccidentType'] = safe_int_convert(row['Tipo Accidente'], 0)
-        fks['idRelativeLocation'] = safe_int_convert(row['Ubicación Relativa'], 0)
-        fks['idSurfaceCondition'] = safe_int_convert(row['Condición calzada'], 0)
-        fks['idWeather'] = safe_int_convert(row['Estado Atmosférico'], 0)
-        fks['idLuminosity'] = safe_int_convert(row['Luminosidad'], 0)
-        fks['idArtificialLight'] = safe_int_convert(row['Luz artificial'], 0)
-        fks['idSection'] = safe_int_convert(row['Tramo'], 0)
-
-    except Exception as e:
-        callback(f"Error inesperado en Lookups 1:N: {e}. Fila: {row}")
-        fks.update({k: 0 for k in ['idAccidentType', 'idRelativeLocation', 'idSurfaceCondition', 'idWeather', 'idLuminosity', 'idArtificialLight', 'idSection'] if k not in fks})
-
+    # 2.2 Helper conversión segura a entero
+    def safe_int(v):
+        # Convertimos a numérico, forzando NaN si falla
+        val = pd.to_numeric(v, errors='coerce')
+        # Si es NaN, devolvemos 0
+        if pd.isna(val):
+            return 0
+        # Si es válido, devolvemos el entero
+        return int(val)
+    
+    fks['idAccidentType'] = safe_int(row['Tipo Accidente'])
+    fks['idRelativeLocation'] = safe_int(row['Ubicación Relativa'])
+    fks['idSurfaceCondition'] = safe_int(row['Condición calzada'])
+    fks['idWeather'] = safe_int(row['Estado Atmosférico'])
+    fks['idLuminosity'] = safe_int(row['Luminosidad'])
+    fks['idArtificialLight'] = safe_int(row['Luz artificial'])
+    fks['idSection'] = safe_int(row['Tramo'])
+    
     return fks
 
-# === 3. Proceso ETL Principal ===
-
+# === 3. ETL Principal ===
 def run(callback):
-    """
-    Carga los accidentes desde Ficha 0 en la tabla factAccident.
-    Recibe un callback para enviar mensajes de log.
-    """
+    conn = None
     try:
-        ruta_db, ruta_base_csv_ficha0 = get_paths()
+        ruta_db, ruta_base_ficha0 = get_paths()
         conn = sqlite3.connect(ruta_db)
         cursor = conn.cursor()
         cursor.execute("PRAGMA foreign_keys = ON;")
 
         callback("--- Cargando Ficha 0: factAccident ---")
         
-        print("Consultando log de archivos ya procesados...")
+        # --- Archivos Procesados ---
         cursor.execute("SELECT FileName FROM etl_log_ficha0")
         processed_files = set(row[0] for row in cursor.fetchall())
         callback(f"Se encontraron {len(processed_files)} archivos en el log.")
-
-        # ... Lectura de CSVs ...
-        print(f"Buscando archivos CSV en: {ruta_base_csv_ficha0} y subcarpetas...")
-        patron_busqueda = os.path.join(ruta_base_csv_ficha0, '**', '*.csv')
-        todos_los_archivos_csv = glob.glob(patron_busqueda, recursive=True)
         
-        nuevos_archivos_csv = []
-        for f in todos_los_archivos_csv:
-            file_name = os.path.basename(f)
-            if file_name not in processed_files:
-                nuevos_archivos_csv.append(f)
+        # --- Buscar Nuevos ---
+        patron = os.path.join(ruta_base_ficha0, '**', '*.csv')
+        todos = glob.glob(patron, recursive=True)
+        nuevos_archivos_csv = [f for f in todos if os.path.basename(f) not in processed_files]
 
         if not nuevos_archivos_csv:
-            callback("No se encontraron archivos CSV nuevos para cargar. El proceso ha finalizado.")
-            conn.close()
+            callback("No se encontraron archivos CSV nuevos. El proceso ha finalizado.")
             return
-        
+
         callback(f"Se encontraron {len(nuevos_archivos_csv)} archivos CSV NUEVOS. Iniciando carga...")
         
-        lista_dataframes = []
-        for archivo_csv in nuevos_archivos_csv:
-            callback(f"  Leyendo: {os.path.basename(archivo_csv)}")
+        lista_dfs = []
+        for f in nuevos_archivos_csv:
             try:
-                df_temp = pd.read_csv(archivo_csv, encoding="utf-8", dtype=str, sep='|', skiprows=1)
-                df_temp['__SourceFileName'] = os.path.basename(archivo_csv)
-                lista_dataframes.append(df_temp)
-            except Exception as e:
-                callback(f"    ERROR: No se pudo leer o procesar el archivo {archivo_csv}. Error: {e}")
-                
-        if not lista_dataframes:
-            callback("Error: Ningún archivo CSV nuevo pudo ser leído correctamente. Saliendo.")
-            conn.close()
-            return
-            
-        df_ficha0 = pd.concat(lista_dataframes, ignore_index=True)
-        print(f"\nCarga de CSVs completada. {len(df_ficha0)} filas totales leídas de {len(nuevos_archivos_csv)} archivos.")
+                # Importante: dtype=str para no perder ceros a la izquierda
+                df_t = pd.read_csv(f, encoding="utf-8", dtype=str, sep='|', skiprows=1)
+                df_t['__SourceFileName'] = os.path.basename(f)
+                lista_dfs.append(df_t)
+            except Exception as e: 
+                callback(f"Error leyendo {os.path.basename(f)}: {e}")
         
-        # --- Pre-cargar mapa de DateTime ---
-        print("Optimizando búsquedas de fecha...")
-        df_main_accident_dates = df_ficha0.drop_duplicates(subset=['ID Accidente']).copy()
+        if not lista_dfs: return
+        df_ficha0 = pd.concat(lista_dfs, ignore_index=True)
+        # Limpieza clave de IDs
+        df_ficha0['ID Accidente'] = df_ficha0['ID Accidente'].str.strip()
+
+        # --- Cargar Mapas de Validación ---
+        def get_ids(tbl, col): 
+            try: return set(pd.read_sql(f"SELECT {col} FROM {tbl}", conn)[col])
+            except: return {0}
+
+        map_ids_section = get_ids("dim_Section", "idSection")
+        map_ids_accidenttype = get_ids("dim_AccidentType", "idAccidentType")
+        map_ids_relativelocation = get_ids("dim_RelativeLocation", "idRelativeLocation")
+        map_ids_surfacecondition = get_ids("dim_SurfaceCondition", "idSurfaceCondition")
+        map_ids_weather = get_ids("dim_Weather", "idWeather")
+        map_ids_luminosity = get_ids("dim_Luminosity", "idLuminosity")
+        map_ids_artificiallight = get_ids("dim_ArtificialLight", "idArtificialLight")
+
+        # --- Mapa Fechas (Optimizado) ---
+        callback("Creando mapa de fechas...")
+        df_ficha0['dt_obj'] = pd.to_datetime(df_ficha0['FECHA/HORA'], format='%d/%m/%Y %H:%M', errors='coerce')
+        # Fallback format
+        mask_nan = df_ficha0['dt_obj'].isna()
+        df_ficha0.loc[mask_nan, 'dt_obj'] = pd.to_datetime(df_ficha0.loc[mask_nan, 'FECHA/HORA'], format='%Y-%m-%d %H:%M:%S', errors='coerce')
         
-        df_main_accident_dates['dt_obj'] = pd.to_datetime(df_main_accident_dates['FECHA/HORA'], format='%d/%m/%Y %H:%M', errors='coerce')
-        mask_failed = df_main_accident_dates['dt_obj'].isna()
-        df_main_accident_dates.loc[mask_failed, 'dt_obj'] = pd.to_datetime(df_main_accident_dates.loc[mask_failed, 'FECHA/HORA'], format='%Y-%m-%d %H:%M:%S', errors='coerce')
-        
-        # --- El formato de búsqueda debe coincidir con la BD ---
-        df_main_accident_dates['LookupKey'] = df_main_accident_dates['dt_obj'].dt.strftime('%Y-%m-%d %H:%M:00')
-        
-        claves_needed = tuple(df_main_accident_dates['LookupKey'].dropna().unique())
+        df_ficha0['LookupKey'] = df_ficha0['dt_obj'].dt.strftime('%Y-%m-%d %H:%M:00')
+        keys = tuple(df_ficha0['LookupKey'].dropna().unique())
         
         mapa_datetime = {}
-        if claves_needed:
-            callback(f"Buscando {len(claves_needed)} claves de fecha únicas en la BD...")
-            df_fecha = pd.read_sql(f"SELECT idDateTime, DateTime FROM dim_DateTime WHERE DateTime IN {claves_needed}", conn)
-            mapa_datetime = dict(zip(df_fecha['DateTime'], df_fecha['idDateTime']))
-            del df_fecha
-        callback(f"Mapa de dim_DateTime creado con {len(mapa_datetime)} claves encontradas.") # Log para verificar
+        if keys:
+            q = pd.read_sql(f"SELECT idDateTime, DateTime FROM dim_DateTime WHERE DateTime IN {keys}", conn)
+            mapa_datetime = dict(zip(q['DateTime'], q['idDateTime']))
 
-        # --- Pre-cargar todos los mapas de puentes ---
-        print("Creando mapas para tablas puente...")
+        # --- PREPARACIÓN DE PUENTES (Mapas) ---
         def crear_mapa_doble(tabla, id_col, col1, col2):
             df_mapa = pd.read_sql(f"SELECT {id_col}, {col1}, {col2} FROM {tabla}", conn)
-            return { (str(row[col1]), int(row[col2])): row[id_col] for index, row in df_mapa.iterrows() } # Convertir col2 a int
+            return { (str(row[col1]), int(row[col2])): row[id_col] for index, row in df_mapa.iterrows() }
 
         def crear_mapa_simple(tabla, id_col, col1):
             df_mapa = pd.read_sql(f"SELECT {id_col}, {col1} FROM {tabla}", conn)
@@ -172,112 +145,73 @@ def run(callback):
         mapa_consequence = crear_mapa_simple("dim_Consequence", "idConsequence", "ConsequenceType")
         mapa_affected = crear_mapa_simple("dim_Affected", "idAffected", "AffectedType")
         mapa_lane = crear_mapa_simple("dim_Lane", "idLane", "LaneValue")
-        
-        callback("Mapas de puentes creados.")
 
-        # --- Cargar mapas de IDs 1:N para validación ---
-        print("Creando mapas de validación 1:N...")
-        def crear_mapa_ids(tabla, id_col):
-            try:
-                return set(pd.read_sql(f"SELECT {id_col} FROM {tabla}", conn)[id_col])
-            except Exception as e:
-                callback(f"Error al cargar mapa de IDs para {tabla}: {e}")
-                # Retorna un set con el ID 'Sin dato' como mínimo
-                return {0} 
-
-        map_ids_section = crear_mapa_ids("dim_Section", "idSection")
-        map_ids_accidenttype = crear_mapa_ids("dim_AccidentType", "idAccidentType")
-        map_ids_relativelocation = crear_mapa_ids("dim_RelativeLocation", "idRelativeLocation")
-        map_ids_surfacecondition = crear_mapa_ids("dim_SurfaceCondition", "idSurfaceCondition")
-        map_ids_weather = crear_mapa_ids("dim_Weather", "idWeather")
-        map_ids_luminosity = crear_mapa_ids("dim_Luminosity", "idLuminosity")
-        map_ids_artificiallight = crear_mapa_ids("dim_ArtificialLight", "idArtificialLight")
-        
-        print("Mapas de validación 1:N creados.")
-
-        # --- 1. Cargar factAccident (Hechos Principales) ---
-        callback("Cargando factAccident...")
-        df_ficha0['ID Accidente'] = df_ficha0['ID Accidente'].str.strip()
-        df_main_accident = df_ficha0.drop_duplicates(subset=['ID Accidente']).reset_index() 
-        
+        # --- Loop Principal ---
         failed_accident_details = {}
-        filas_para_fact_accident = []
-        total_rows = len(df_main_accident)
-        start_loop = time.time()
+        filas_para_insertar = []
+        df_main = df_ficha0.drop_duplicates(subset=['ID Accidente'])
+        
+        total = len(df_main)
+        callback(f"Procesando {total} accidentes...")
 
-        for index, row in df_main_accident.iterrows():
-            if (index + 1) % 10000 == 0:
-                elapsed = time.time() - start_loop
-                rows_per_sec = (index + 1) / elapsed
-                callback(f"  ... Procesando Accidente {index + 1} de {total_rows} ({rows_per_sec:.0f} filas/seg)")
-            
-            fks = obtener_fk(cursor, row, mapa_datetime, callback) # Llamada a la función global
+        for idx, row in df_main.iterrows():
             id_acc = row['ID Accidente']
+            fks = obtener_fk(cursor, row, mapa_datetime, callback)
             
-            damage_text = str(row['Daños Ocasionados a la Infraestructura vial'])
-            total_veh = 0
+            # --- VALIDACIÓN MANUAL PARA GENERAR MENSAJE LIMPIO ---
+            err_msg = None
             
-            try:
-                error_fk = None
-                if fks['idDateTime'] is None:
-                    error_fk = "idDateTime es Nulo (fecha nan o no encontrada)"
-                elif fks['idSection'] not in map_ids_section:
-                    error_fk = f"idSection {fks['idSection']} no existe en dim_Section"
-                elif fks['idAccidentType'] not in map_ids_accidenttype:
-                    error_fk = f"idAccidentType {fks['idAccidentType']} no existe en dim_AccidentType"
-                elif fks['idRelativeLocation'] not in map_ids_relativelocation:
-                    error_fk = f"idRelativeLocation {fks['idRelativeLocation']} no existe en dim_RelativeLocation"
-                elif fks['idSurfaceCondition'] not in map_ids_surfacecondition:
-                    error_fk = f"idSurfaceCondition {fks['idSurfaceCondition']} no existe en dim_SurfaceCondition"
-                elif fks['idWeather'] not in map_ids_weather:
-                    error_fk = f"idWeather {fks['idWeather']} no existe en dim_Weather"
-                elif fks['idLuminosity'] not in map_ids_luminosity:
-                    error_fk = f"idLuminosity {fks['idLuminosity']} no existe en dim_Luminosity"
-                elif fks['idArtificialLight'] not in map_ids_artificiallight:
-                    error_fk = f"idArtificialLight {fks['idArtificialLight']} no existe en dim_ArtificialLight"
+            if fks['idDateTime'] is None:
+                err_msg = f"Fecha inválida o no encontrada: '{row.get('FECHA/HORA')}'"
+            elif fks['idAccidentType'] not in map_ids_accidenttype:
+                err_msg = f"Tipo Accidente ({fks['idAccidentType']}) no existe en la base de datos."
+            elif fks['idRelativeLocation'] not in map_ids_relativelocation:
+                err_msg = f"Ubicación Relativa ({fks['idRelativeLocation']}) no existe en la base de datos."
+            elif fks['idSection'] not in map_ids_section:
+                err_msg = f"Tramo/Sección ({fks['idSection']}) no existe en la base de datos."
+            elif fks['idSurfaceCondition'] not in map_ids_surfacecondition:
+                err_msg = f"Condición Calzada ({fks['idSurfaceCondition']}) no existe en la base de datos."
+            elif fks['idWeather'] not in map_ids_weather:
+                err_msg = f"Clima ({fks['idWeather']}) no existe en la base de datos."
+            elif fks['idLuminosity'] not in map_ids_luminosity:
+                err_msg = f"Luminosidad ({fks['idLuminosity']}) no existe en la base de datos."
+            elif fks['idArtificialLight'] not in map_ids_artificiallight:
+                err_msg = f"Luz Artificial ({fks['idArtificialLight']}) no existe en la base de datos."
 
-                if error_fk:
-                    # Usar la misma clase de excepción para que el logger la capture
-                    raise sqlite3.IntegrityError(f"FOREIGN KEY no encontrada: {error_fk}. Valores: {fks}")
-                
-                # Si pasa la validación, se añade a la lista
-                filas_para_fact_accident.append((
-                    id_acc, fks['idDateTime'], fks['idSection'],
-                    fks['idAccidentType'], fks['idRelativeLocation'],
-                    fks['idSurfaceCondition'], fks['idWeather'], fks['idLuminosity'], fks['idArtificialLight'],
-                    damage_text, row['Descripción del Accidente'], total_veh
+            if err_msg:
+                # Guardamos solo el mensaje limpio y el archivo
+                failed_accident_details[id_acc] = (err_msg, row['__SourceFileName'])
+            else:
+                # Si pasa la validación manual, preparamos la tupla
+                filas_para_insertar.append((
+                    id_acc, fks['idDateTime'], fks['idSection'], fks['idAccidentType'],
+                    fks['idRelativeLocation'], fks['idSurfaceCondition'], fks['idWeather'],
+                    fks['idLuminosity'], fks['idArtificialLight'], 
+                    str(row.get('Daños Ocasionados a la Infraestructura vial','')), 
+                    str(row.get('Descripción del Accidente','')), 
+                    0 # totalVehicles placeholder
                 ))
-                
-            except sqlite3.IntegrityError as e:
-                if "FOREIGN KEY" in str(e) or "FOREIGN KEY no encontrada" in str(e):
-                    callback(f"Error de Integridad FK al insertar {id_acc}: {e}")
-                    callback(f"Valores FK que fallaron: {fks}")
-                elif "UNIQUE" in str(e) or "PRIMARY KEY" in str(e):
-                    callback(f"Info: {id_acc} ya existe. Omitiendo (PK/UNIQUE).")
-                else:
-                    callback(f"Error de Integridad (otro) al insertar {id_acc}: {e}")
-                failed_accident_details[id_acc] = (fks, row['__SourceFileName'])
 
-        if filas_para_fact_accident:
-            callback(f"Insertando {len(filas_para_fact_accident)} filas válidas en factAccident...")
+        # --- Inserción Masiva (factAccident) ---
+        if filas_para_insertar:
+            callback(f"Insertando {len(filas_para_insertar)} accidentes válidos...")
             try:
                 cursor.executemany("""
                     INSERT OR IGNORE INTO factAccident (
-                        idAccident, idDateTime, idSection,
-                        idAccidentType, idRelativeLocation,
+                        idAccident, idDateTime, idSection, idAccidentType, idRelativeLocation,
                         idSurfaceCondition, idWeather, idLuminosity, idArtificialLight,
                         InfrastructureDamage, Description, totalVehicles
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, filas_para_fact_accident)
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """, filas_para_insertar)
             except sqlite3.IntegrityError as e:
-                callback(f"ERROR FATAL en carga por lotes de factAccident. Revisar duplicados o FKs. Error: {e}")
+                # Error en lote (poco probable con validación previa, pero por si acaso)
+                callback(f"Error en inserción masiva: {e}")
                 conn.rollback()
                 raise e
-
-        callback("...factAccident procesado.")
-
-        # --- 2. Cargar Tablas Puente (M:N) y Detalle ---
-        callback("Cargando tablas puente y de detalle...")
+        
+        # --- CARGA DE PUENTES (Tablas M:N) ---
+        callback("Cargando tablas puente y detalle...")
+        # Iteramos sobre el dataframe completo original con duplicados para puentes
         df_full = df_ficha0.drop_duplicates().reset_index()
 
         filas_bridge_response = []
@@ -287,137 +221,104 @@ def run(callback):
         filas_bridge_lane = []
         filas_bridge_km = []
 
-        total_rows_full = len(df_full)
-        start_loop_bridges = time.time()
-
         for index, row in df_full.iterrows():
             id_acc = row['ID Accidente']
             
-            if (index + 1) % 50000 == 0:
-                elapsed = time.time() - start_loop_bridges
-                rows_per_sec = (index + 1) / elapsed
-                callback(f"  ... Procesando fila M:N {index + 1} de {total_rows_full} ({rows_per_sec:.0f} filas/seg)")
-
+            # Si el accidente falló en la carga principal, NO cargamos sus puentes
             if id_acc in failed_accident_details:
                 continue
 
             try:
-                val_concurrencia = pd.to_numeric(row['Valor Concurrencia'], errors='coerce')
-                if pd.notna(val_concurrencia):
-                    id_resp_result = mapa_response.get((str(row['Concurrencia']), int(val_concurrencia)))
-                    if id_resp_result:
-                        filas_bridge_response.append((id_acc, id_resp_result))
+                # Logica Response
+                val_resp = pd.to_numeric(row['Valor Concurrencia'], errors='coerce')
+                if pd.notna(val_resp):
+                    res_id = mapa_response.get((str(row['Concurrencia']), int(val_resp)))
+                    if res_id: filas_bridge_response.append((id_acc, res_id))
 
+                # Logica Causa
                 val_causa = pd.to_numeric(row['Valor Causa Probable'], errors='coerce')
                 if pd.notna(val_causa):
-                    id_cause_result = mapa_probablecause.get((str(row['Causa Probable']), int(val_causa)))
-                    if id_cause_result:
-                        filas_bridge_probablecause.append((id_acc, id_cause_result))
+                    cau_id = mapa_probablecause.get((str(row['Causa Probable']), int(val_causa)))
+                    if cau_id: filas_bridge_probablecause.append((id_acc, cau_id))
 
-                val_entorno = pd.to_numeric(row['Valor Condiciones del Entorno'], errors='coerce')
-                if pd.notna(val_entorno):
-                    id_env_result = mapa_environment.get((str(row['Condiciones del Entorno']), int(val_entorno)))
-                    if id_env_result:
-                        filas_bridge_environment.append((id_acc, id_env_result))
+                # Logica Entorno
+                val_ent = pd.to_numeric(row['Valor Condiciones del Entorno'], errors='coerce')
+                if pd.notna(val_ent):
+                    ent_id = mapa_environment.get((str(row['Condiciones del Entorno']), int(val_ent)))
+                    if ent_id: filas_bridge_environment.append((id_acc, ent_id))
 
-                id_cons_result = mapa_consequence.get(str(row['Consecuencia']))
-                id_aff_result = mapa_affected.get(str(row['Afectado']))
-                val_afectados = pd.to_numeric(row['Cantidad Afectados'], errors='coerce')
-                
-                if id_cons_result and id_aff_result and pd.notna(val_afectados):
-                    filas_fact_affected.append((id_acc, id_cons_result, id_aff_result, int(val_afectados)))
-            
-            except Exception as e_inner:
-                callback(f"Error procesando fila M:N para {id_acc} (Fila CSV {index}): {e_inner}")
+                # Logica Afectados
+                cons_id = mapa_consequence.get(str(row['Consecuencia']))
+                aff_id = mapa_affected.get(str(row['Afectado']))
+                cnt_aff = pd.to_numeric(row['Cantidad Afectados'], errors='coerce')
+                if cons_id and aff_id and pd.notna(cnt_aff):
+                    filas_fact_affected.append((id_acc, cons_id, aff_id, int(cnt_aff)))
 
-        df_lanes_km = df_main_accident[['ID Accidente', 'Km', 'P1', 'P2', 'P3', 'P4', 'P5', 'P6']]
-        
-        for index, row in df_lanes_km.iterrows():
-            id_acc = row['ID Accidente']
-            
-            if id_acc in failed_accident_details:
-                continue
-                
-            for i in range(1, 7):
-                col_name = f'P{i}'
-                if pd.to_numeric(row[col_name], errors='coerce') > 0: 
-                    id_lane_result = mapa_lane.get(i) # Usar mapa
-                    if id_lane_result:
-                        filas_bridge_lane.append((id_acc, id_lane_result))
-                    else:
-                        callback(f"Error: No se encontró idLane para LaneValue = {i}. Saltando.")
-            
-            try:
-                km_val_csv = pd.to_numeric(row['Km'], errors='coerce')
-                if pd.notna(km_val_csv):
-                    km_rounded = round(float(km_val_csv), 3) 
-                    km_result = cursor.execute("SELECT idKm FROM dim_Km WHERE Km = ?", (km_rounded,)).fetchone()
-                    if km_result:
-                        filas_bridge_km.append((id_acc, km_result[0]))
-                    else:
-                        callback(f"Error: No se encontró idKm para Km = {km_rounded} (Accidente {id_acc}).")
-            except Exception as e_km:
-                callback(f"Error procesando puente Km para {id_acc}: {e_km}")
-        
-        print("Insertando datos en tablas puente...")
-        if filas_bridge_response:
-            cursor.executemany("INSERT OR IGNORE INTO bridge_Accident_Response (idAccident, idResponse) VALUES (?, ?)", filas_bridge_response)
-        if filas_bridge_probablecause:
-            cursor.executemany("INSERT OR IGNORE INTO bridge_Accident_ProbableCause (idAccident, idProbableCause) VALUES (?, ?)", filas_bridge_probablecause)
-        if filas_bridge_environment:
-            cursor.executemany("INSERT OR IGNORE INTO bridge_Accident_Environment (idAccident, idEnvironment) VALUES (?, ?)", filas_bridge_environment)
-        if filas_fact_affected:
-            cursor.executemany("INSERT OR IGNORE INTO factAccidentAffected (idAccident, idConsequence, idAffected, AffectedCount) VALUES (?, ?, ?, ?)", filas_fact_affected)
-        if filas_bridge_lane:
-            cursor.executemany("INSERT OR IGNORE INTO bridge_Accident_Lane (idAccident, idLane) VALUES (?, ?)", filas_bridge_lane)
-        if filas_bridge_km:
-            cursor.executemany("INSERT OR IGNORE INTO bridge_Accident_Km (idAccident, idKm) VALUES (?, ?)", filas_bridge_km)
+                # Logica Pistas (Lanes)
+                for i in range(1, 7):
+                    if pd.to_numeric(row[f'P{i}'], errors='coerce') > 0:
+                        ln_id = mapa_lane.get(i)
+                        if ln_id: filas_bridge_lane.append((id_acc, ln_id))
 
-        callback("...tablas puente y de detalle cargadas.")
+                # Logica Km
+                km_val = pd.to_numeric(row['Km'], errors='coerce')
+                if pd.notna(km_val):
+                    km_rnd = round(float(km_val), 3)
+                    cur_km = cursor.execute("SELECT idKm FROM dim_Km WHERE Km = ?", (km_rnd,)).fetchone()
+                    if cur_km: filas_bridge_km.append((id_acc, cur_km[0]))
 
-        conn.commit() 
-        callback("Datos guardados en base de datos.")
+            except Exception:
+                pass # Ignoramos errores menores en puentes para no detener carga masiva
 
-        # --- Lógica de Log ---
-        callback("Registrando archivos procesados en el log (Ficha 0)...")
-        now_str = datetime.now().isoformat()
-        
-        dirty_files = set()
-        if failed_accident_details:
-            for fks, filename in failed_accident_details.values():
-                dirty_files.add(filename)
-        
-        files_to_log = []
-        for f_path in nuevos_archivos_csv:
-            f_name = os.path.basename(f_path)
-            if f_name not in dirty_files:
-                files_to_log.append((f_name, now_str))
-                
-        if files_to_log:
-            cursor.executemany("INSERT OR IGNORE INTO etl_log_ficha0 (FileName, LoadedTimestamp) VALUES (?, ?)", files_to_log)
-            callback(f"{len(files_to_log)} archivos 100% limpios registrados en el log etl_log_ficha0.")
-        
-        if dirty_files:
-            callback(f"ADVERTENCIA: {len(dirty_files)} archivos con errores no se registraron en etl_log_ficha0 y serán reintentados.")
+        # Inserción de Puentes
+        if filas_bridge_response: cursor.executemany("INSERT OR IGNORE INTO bridge_Accident_Response (idAccident, idResponse) VALUES (?,?)", filas_bridge_response)
+        if filas_bridge_probablecause: cursor.executemany("INSERT OR IGNORE INTO bridge_Accident_ProbableCause (idAccident, idProbableCause) VALUES (?,?)", filas_bridge_probablecause)
+        if filas_bridge_environment: cursor.executemany("INSERT OR IGNORE INTO bridge_Accident_Environment (idAccident, idEnvironment) VALUES (?,?)", filas_bridge_environment)
+        if filas_fact_affected: cursor.executemany("INSERT OR IGNORE INTO factAccidentAffected (idAccident, idConsequence, idAffected, AffectedCount) VALUES (?,?,?,?)", filas_fact_affected)
+        if filas_bridge_lane: cursor.executemany("INSERT OR IGNORE INTO bridge_Accident_Lane (idAccident, idLane) VALUES (?,?)", filas_bridge_lane)
+        if filas_bridge_km: cursor.executemany("INSERT OR IGNORE INTO bridge_Accident_Km (idAccident, idKm) VALUES (?,?)", filas_bridge_km)
 
-        if failed_accident_details:
-            callback("\n--- ⚠️ Reporte Detallado de Errores de Carga (Ficha 0) ---")
-            callback(f"Se omitieron {len(failed_accident_details)} accidentes por IDs de dimensión inválidos.")
-            callback("Los valores FK de los accidentes que fallaron son:")
-            
-            for failed_id, (fks_error, filename) in sorted(failed_accident_details.items()):
-                callback(f"\n  - ID Accidente: {failed_id} (Del archivo: {filename})")
-                callback(f"    Valores FK: {fks_error}")
-                
         conn.commit()
+
+        # --- Logs de Archivos ---
+        now_str = datetime.now().isoformat()
+        # Identificar archivos sucios tuvieron al menos un error
+        dirty_files = set(v[1] for v in failed_accident_details.values())
+        
+        to_log = []
+        for f in nuevos_archivos_csv:
+            fname = os.path.basename(f)
+            if fname not in dirty_files:
+                to_log.append((fname, now_str))
+        
+        if to_log:
+            cursor.executemany("INSERT OR IGNORE INTO etl_log_ficha0 VALUES (?,?)", to_log)
+        
+        conn.commit()
+
+        # === REPORTE EJECUTIVO LIMPIO PARA EL GESTOR ===
+        if failed_accident_details:
+            # Encabezado exacto que busca el Gestor
+            callback("\n--- Reporte Detallado de Errores de Carga (Ficha 0) ---")
+            callback(f"Se omitieron {len(failed_accident_details)} accidentes.")
+            
+            # Limitar a los primeros 20 errores para no saturar si son muchos
+            limit_count = 0
+            for id_acc, (error_msg, archivo) in failed_accident_details.items():
+                if limit_count >= 20:
+                    callback(f"... y {len(failed_accident_details) - 20} errores más.")
+                    break
+                
+                # FORMATO LIMPIO:
+                callback(f"- ID Accidente: {id_acc}")
+                callback(f"  Error: {error_msg} (Archivo: {archivo})")
+                limit_count += 1
+
         callback("Proceso ETL para Ficha 0 completado.")
 
     except Exception as e:
         callback(f"Error: {e}")
-        if 'conn' in locals():
-            conn.rollback()
+        if conn: conn.rollback()
         raise
     finally:
-        if 'conn' in locals():
-            conn.close()
-            print("Conexión cerrada.")
+        if conn: conn.close()
